@@ -1,0 +1,455 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ML Model Trainer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        
+        .container {
+            max-width: 90%;
+            margin: 0 auto;
+        }
+        
+        .option-box {
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 0;
+            margin-bottom: 20px;
+            position: relative;
+            overflow: visible; /* Changed from hidden */
+            width: 100%;
+        }
+        
+        .option-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 0;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+            width: 100%;
+        }
+        
+        .option-checkbox {
+            margin-right: 10px;
+            accent-color: #0d6efd;
+            width: 18px;
+            height: 18px;
+        }
+        
+        .option-content {
+            padding: 0;
+            width: 100%;
+        }
+        
+        .disabled {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+        
+        .card {
+            border: none;
+            border-radius: 0;
+            width: 100%;
+        }
+        
+        .card-body {
+            padding: 20px;
+            width: 100%;
+        }
+        
+        /* Fixed Dropdown Styles */
+        .ml-dropdown {
+            position: relative;
+            width: 100%;
+        }
+        
+        .ml-dropdown-btn {
+            background-color: white;
+            color: #333;
+            padding: 12px 16px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            cursor: pointer;
+            width: 100%;
+            text-align: left;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 16px;
+        }
+        
+        .ml-dropdown-content {
+            display: none;
+            position: absolute;
+            background-color: white;
+            width: 100%;
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            z-index: 1050; /* Higher z-index */
+            margin-top: 5px;
+        }
+        
+        .ml-dropdown-content.show {
+            display: block;
+        }
+        
+        .ml-item {
+            color: #212529;
+            padding: 10px 16px;
+            text-decoration: none;
+            display: block;
+            border-bottom: 1px solid #f1f1f1;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .ml-item:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .bi-chevron-down {
+            transition: transform 0.2s ease;
+        }
+        
+        .ml-dropdown-btn.active .bi-chevron-down {
+            transform: rotate(180deg);
+        }
+        
+        .train-btn-container {
+            width: 100%;
+            margin-top: 20px;
+        }
+        
+        /* Results Section */
+        #results {
+            margin-top: 30px;
+            display: none;
+        }
+        
+        .metric-card {
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 15px;
+            background-color: white;
+        }
+    </style>
+</head>
+<body>
+    {% include 'partials/navbar.html' %}
+    <div class="container">
+        
+        <!-- Separate Files Section -->
+        <div class="option-box">
+            <div class="option-header">
+                <input type="checkbox" class="option-checkbox" id="op1-checkbox" checked>
+                <h5 class="m-0">Separate Training and Testing Files</h5>
+            </div>
+            <div class="option-content" id="op1-content">
+                <div class="file-option-section active" id="separateSection">
+                    <div class="card">
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <label class="form-label">Training Data</label>
+                                <input class="form-control" type="file" name="training_file" id="trainingFile">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Testing Data</label>
+                                <input class="form-control" type="file" name="testing_file" id="testingFile">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Single File Section -->
+        <div class="option-box">
+            <div class="option-header">
+                <input type="checkbox" class="option-checkbox" id="op2-checkbox">
+                <h5 class="m-0">Single Dataset File with Split</h5>
+            </div>
+            <div class="option-content" id="op2-content" class="disabled">
+                <div class="file-option-section" id="singleSection">
+                    <div class="card">
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <label class="form-label">Dataset File</label>
+                                <input class="form-control" type="file" name="dataset_file" id="datasetFile" accept=".csv">
+                            </div>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <label class="form-label">Train Percentage</label>
+                                    <input type="number" class="form-control" name="train_percent" value="80" min="1" max="99">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Test Percentage</label>
+                                    <input type="number" class="form-control" name="test_percent" value="20" min="1" max="99">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ML Algorithm Selection Box -->
+        <div class="Algo_selection">
+            <div class="MLheader">
+                <h5 class="m-0">Machine Learning Algorithm</h5>
+            </div>
+            <div class="ML_content">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="ml-dropdown">
+                            <button type="button" class="ml-dropdown-btn" id="mlDropdownBtn">
+                                <span id="selectedAlgorithm">Select Algorithm</span>
+                                <i class="bi bi-chevron-down"></i>
+                            </button>
+                            <div class="ml-dropdown-content" id="mlDropdown">
+                                <div class="ml-item" data-value="linear_regression">Linear Regression</div>
+                                <div class="ml-item" data-value="logistic_regression">Logistic Regression</div>
+                                <div class="ml-item" data-value="decision_tree">Decision Tree</div>
+                                <div class="ml-item" data-value="random_forest">Random Forest</div>
+                                <div class="ml-item" data-value="svm">Support Vector Machine</div>
+                                <div class="ml-item" data-value="knn">K-Nearest Neighbors</div>
+                                <div class="ml-item" data-value="neural_network">Neural Network</div>
+                            </div>
+                        </div>
+                        <input type="hidden" name="algorithm" id="algorithmValue">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Training button -->
+        <div class="train-btn-container text-center">
+            <button type="button" class="btn btn-success btn-lg" id="trainButton">
+                <i class="bi bi-play-circle me-1"></i> Train Model
+            </button>
+            <div id="loadingIndicator" class="mt-3" style="display: none;">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p>Training model...</p>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="results" class="option-box">
+            <div class="option-header">
+                <h5 class="m-0">Training Results</h5>
+            </div>
+            <div class="option-content">
+                <div class="card">
+                    <div class="card-body" id="resultContent">
+                        <!-- Results will be inserted here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {% include 'partials/footer.html' %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+        // File option toggle functionality
+        const checkboxes = document.querySelectorAll('.option-checkbox');
+        const contents = document.querySelectorAll('.option-content');
+        
+        // Set initial state (op-1 checked by default)
+        document.getElementById('op2-content').classList.add('disabled');
+        
+        // Add event listeners to all checkboxes
+        checkboxes.forEach(checkbox => {
+            checkbox.addEventListener('change', function() {
+                if (this.checked) {
+                    // Uncheck all other checkboxes
+                    checkboxes.forEach(cb => {
+                        if (cb !== this) cb.checked = false;
+                    });
+                    
+                    // Enable content for this checkbox, disable others
+                    contents.forEach(content => {
+                        if (content.id === this.id.replace('-checkbox', '-content')) {
+                            content.classList.remove('disabled');
+                        } else {
+                            content.classList.add('disabled');
+                        }
+                    });
+                } else {
+                    // Prevent unchecking the last checked checkbox
+                    const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+                    if (checkedCount === 0) {
+                        this.checked = true;
+                    }
+                }
+            });
+        });
+
+        // ML Algorithm Dropdown functionality - Fixed version
+        const mlDropdownBtn = document.getElementById('mlDropdownBtn');
+        const mlDropdown = document.getElementById('mlDropdown');
+        const selectedAlgorithm = document.getElementById('selectedAlgorithm');
+        const algorithmValue = document.getElementById('algorithmValue');
+        
+        // Initialize dropdown state
+        mlDropdownBtn.classList.remove('active');
+        mlDropdown.classList.remove('show');
+        
+        mlDropdownBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            this.classList.toggle('active');
+            mlDropdown.classList.toggle('show');
+        });
+        
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!mlDropdownBtn.contains(e.target) && !mlDropdown.contains(e.target)) {
+                mlDropdownBtn.classList.remove('active');
+                mlDropdown.classList.remove('show');
+            }
+        });
+        
+        // Close dropdown when pressing Escape
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                mlDropdownBtn.classList.remove('active');
+                mlDropdown.classList.remove('show');
+            }
+        });
+        
+        // Handle algorithm selection
+        document.querySelectorAll('.ml-item').forEach(item => {
+            item.addEventListener('click', function(e) {
+                e.preventDefault();
+                selectedAlgorithm.textContent = this.textContent;
+                algorithmValue.value = this.dataset.value;
+                mlDropdownBtn.classList.remove('active');
+                mlDropdown.classList.remove('show');
+            });
+        });
+
+        // Training functionality
+        document.getElementById('trainButton').addEventListener('click', function() {
+    // Validate algorithm selection
+    if (!algorithmValue.value) {
+        alert('Please select an algorithm');
+        return;
+    }
+
+    // Determine which file option is selected
+    const separateFilesOption = document.getElementById('op1-checkbox').checked;
+    const formData = new FormData();
+    let valid = false;
+
+    if (separateFilesOption) {
+        alert('Your backend currently only supports single file upload. Please use the "Single Dataset File with Split" option.');
+        return;
+    } else {
+        // Handle single file option (matches your backend)
+        const datasetFile = document.getElementById('datasetFile').files[0];
+        const trainPercent = document.querySelector('input[name="train_percent"]').value;
+        
+        if (!datasetFile) {
+            alert('Please upload a dataset file');
+            return;
+        }
+        
+        formData.append('dataset_file', datasetFile);
+        formData.append('train_percent', trainPercent);
+        valid = true;
+    }
+
+    if (!valid) return;
+
+    // Add algorithm to form data
+    formData.append('algorithm', algorithmValue.value);
+
+    // Show loading indicator
+    document.getElementById('loadingIndicator').style.display = 'block';
+    document.getElementById('trainButton').disabled = true;
+    document.getElementById('results').style.display = 'none';
+
+    // Get CSRF token
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+    
+    const csrftoken = getCookie('csrftoken');
+
+    // Send request to server
+    fetch("{% url 'train_model' %}", {
+        method: 'POST',
+        body: formData,
+        headers: {
+            'X-CSRFToken': csrftoken
+        }
+    })
+    .then(response => {
+        if (!response.ok) {
+            return response.json().then(err => { throw new Error(err.error || 'Network response was not ok') });
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.error) {
+            throw new Error(data.error);
+        }
+        
+        // Display results - adjusted to match your backend response
+        const resultContent = document.getElementById('resultContent');
+        resultContent.innerHTML = `
+            <div class="metric-card">
+                <h5>Algorithm: ${data.algorithm}</h5>
+                <p>Accuracy: ${data.accuracy.toFixed(4)}</p>
+                <p>Precision: ${data.precision.toFixed(4)}</p>
+                <p>Recall: ${data.recall.toFixed(4)}</p>
+                <p>F1 Score: ${data.f1_score.toFixed(4)}</p>
+            </div>
+            <div class="metric-card">
+                <h5>Confusion Matrix</h5>
+                <pre>${JSON.stringify(data.confusion_matrix, null, 2)}</pre>
+            </div>
+        `;
+        document.getElementById('results').style.display = 'block';
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Training failed: ' + error.message);
+    })
+    .finally(() => {
+        document.getElementById('loadingIndicator').style.display = 'none';
+        document.getElementById('trainButton').disabled = false;
+    });
+});
+    </script>
+</body>
+</html>

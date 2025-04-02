@@ -1,0 +1,36 @@
+<!-- templates/partials/navbar.html -->
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-light sticky-top">
+        <div class="container">
+            <a class="navbar-brand fw-bold" href="#">Genitic_Insight</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/' %}active{% endif %}" 
+                           href="{% url 'home' %}">Home</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/feature_extraction/' %}active{% endif %}" 
+                           href="{% url 'feature_extraction' %}">Features</a>
+                    </li>
+
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/data_visualization/' %}active{% endif %}" 
+                           href="{% url 'data_visualization' %}">Visualization</a>
+                    </li>
+                    
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/module-selection/' %}active{% endif %}" 
+                           href="{% url 'module_selection' %}">Modules</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/evaluation-values/' %}active{% endif %}" 
+                           href="{% url 'evaluation_values' %}">Evaluation</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
