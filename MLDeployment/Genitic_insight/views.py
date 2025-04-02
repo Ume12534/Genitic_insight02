@@ -261,7 +261,7 @@ def module_selection(request):
 
 
 
-# @csrf_exempt
+@csrf_exempt
 def train_model(request):
     if request.method == 'POST':
         try:
@@ -278,9 +278,6 @@ def train_model(request):
                 return JsonResponse({'error': 'Invalid train percentage (must be integer between 1-99)'}, status=400)
             
             algorithm = request.POST.get('algorithm')
-            if algorithm not in ['linear_regression', 'logistic_regression', 'random_forest', 
-                               'decision_tree', 'svm', 'knn', 'neural_network']:
-                return JsonResponse({'error': 'Invalid algorithm selected'}, status=400)
             
             # Process file
             try:
@@ -290,9 +287,20 @@ def train_model(request):
             except Exception as e:
                 return JsonResponse({'error': f'Error reading CSV file: {str(e)}'}, status=400)
             
-            # Rest of your existing code...
             X = df.iloc[:, :-1]  # Assume last column is target
             y = df.iloc[:, -1]
+            
+            # Determine problem type
+            problem_type = 'classification' if y.dtype == 'object' or len(y.unique()) < 10 else 'regression'
+            
+            # Validate algorithm based on problem type
+            regression_algorithms = ['linear_regression', 'random_forest_regressor', 'svm_regressor']
+            classification_algorithms = ['logistic_regression', 'random_forest', 'decision_tree', 'svm', 'knn', 'neural_network']
+            
+            if problem_type == 'regression' and algorithm not in regression_algorithms:
+                return JsonResponse({'error': f'Selected algorithm is not suitable for regression problems. Please use: {", ".join(regression_algorithms)}'}, status=400)
+            elif problem_type == 'classification' and algorithm not in classification_algorithms:
+                return JsonResponse({'error': f'Selected algorithm is not suitable for classification problems. Please use: {", ".join(classification_algorithms)}'}, status=400)
             
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, train_size=train_percent/100, random_state=42
@@ -308,12 +316,18 @@ def train_model(request):
             elif algorithm == 'random_forest':
                 from sklearn.ensemble import RandomForestClassifier
                 model = RandomForestClassifier()
+            elif algorithm == 'random_forest_regressor':
+                from sklearn.ensemble import RandomForestRegressor
+                model = RandomForestRegressor()
             elif algorithm == 'decision_tree':
                 from sklearn.tree import DecisionTreeClassifier
                 model = DecisionTreeClassifier()
             elif algorithm == 'svm':
                 from sklearn.svm import SVC
                 model = SVC()
+            elif algorithm == 'svm_regressor':
+                from sklearn.svm import SVR
+                model = SVR()
             elif algorithm == 'knn':
                 from sklearn.neighbors import KNeighborsClassifier
                 model = KNeighborsClassifier()
@@ -326,29 +340,47 @@ def train_model(request):
             model.fit(X_train, y_train)
             y_pred = model.predict(X_test)
             
-            # Calculate metrics
-            accuracy = accuracy_score(y_test, y_pred)
-            precision = precision_score(y_test, y_pred, average='weighted')
-            recall = recall_score(y_test, y_pred, average='weighted')
-            f1 = f1_score(y_test, y_pred, average='weighted')
-            cm = confusion_matrix(y_test, y_pred)
+            # Calculate metrics based on problem type
+            if problem_type == 'classification':
+                from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+                accuracy = accuracy_score(y_test, y_pred)
+                precision = precision_score(y_test, y_pred, average='weighted')
+                recall = recall_score(y_test, y_pred, average='weighted')
+                f1 = f1_score(y_test, y_pred, average='weighted')
+                cm = confusion_matrix(y_test, y_pred)
+                
+                results = {
+                    'problem_type': 'classification',
+                    'accuracy': accuracy,
+                    'precision': precision,
+                    'recall': recall,
+                    'f1_score': f1,
+                    'confusion_matrix': cm.tolist(),
+                }
+            else:  # regression
+                from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+                mse = mean_squared_error(y_test, y_pred)
+                mae = mean_absolute_error(y_test, y_pred)
+                r2 = r2_score(y_test, y_pred)
+                
+                results = {
+                    'problem_type': 'regression',
+                    'mse': mse,
+                    'mae': mae,
+                    'r2_score': r2,
+                }
             
             # Return results
             return JsonResponse({
                 'algorithm': algorithm.replace('_', ' ').title(),
-                'accuracy': accuracy,
-                'precision': precision,
-                'recall': recall,
-                'f1_score': f1,
-                'confusion_matrix': cm.tolist(),
+                'problem_type': problem_type,
+                **results
             })
             
         except Exception as e:
             return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)
     
     return JsonResponse({'error': 'Only POST requests are allowed'}, status=405)
-
-
 # def load_training_data(request):
 #     """Load training data based on input method"""
 #     if 'use_extracted' in request.POST:
