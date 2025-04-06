@@ -14,6 +14,7 @@ class DNAFeatureExtractor:
     - NAC: Nucleotide composition
     - ANF: Accumulated nucleotide frequency
     - ENAC: Enhanced nucleotide composition (sliding window)
+    - Automatic label assignment based on sequence IDs
     """
     
     # DNA nucleotide alphabet and complement
@@ -21,23 +22,44 @@ class DNAFeatureExtractor:
     COMPLEMENT = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
     
     @staticmethod
-    def read_fasta(file_path):
+    def assign_label(seq_id):
+        """Assign label based on sequence ID (0 for positive, 1 for negative)"""
+        seq_id = str(seq_id).lower()  # Convert to lowercase for case-insensitive check
+        if 'pos' in seq_id or 'p' in seq_id or '|0|' in seq_id:
+            return 0  # Positive class
+        return 1  # Negative class
+
+    @staticmethod
+    def read_fasta(file_path, include_labels=False):
         """Read DNA sequences from FASTA file"""
         sequences = []
         ids = []
+        labels = []
         for record in SeqIO.parse(file_path, "fasta"):
             sequences.append(str(record.seq).upper())
             ids.append(record.id)
+            if include_labels:
+                labels.append(DNAFeatureExtractor.assign_label(record.id))
+        if include_labels:
+            return ids, sequences, np.array(labels)
         return ids, sequences
 
     @staticmethod
-    def features_to_csv(ids, features, feature_names):
-        """Convert features to CSV string (renamed from to_csv to avoid conflict)"""
+    def features_to_csv(ids, features, feature_names, labels=None):
+        """Convert features to CSV string"""
         csv_buffer = StringIO()
         writer = csv.writer(csv_buffer)
-        writer.writerow(['ID'] + feature_names)
-        for seq_id, feature_vec in zip(ids, features):
-            writer.writerow([seq_id] + list(feature_vec))
+        
+        # Include labels in header if provided
+        if labels is not None:
+            writer.writerow(['ID'] + feature_names + ['label'])
+            for seq_id, feature_vec, label in zip(ids, features, labels):
+                writer.writerow([seq_id] + list(feature_vec) + [label])
+        else:
+            writer.writerow(['ID'] + feature_names)
+            for seq_id, feature_vec in zip(ids, features):
+                writer.writerow([seq_id] + list(feature_vec))
+                
         return csv_buffer.getvalue()
 
     # ==================== Kmer ====================
@@ -55,12 +77,19 @@ class DNAFeatureExtractor:
         freqs = np.array([counts[kmer] for kmer in kmers])
         return freqs / total if normalize else freqs
 
-    def extract_kmer(self, fasta_file, k=3):
+    def extract_kmer(self, fasta_file, k=3, include_labels=False):
         """Extract k-mer features"""
-        ids, sequences = self.read_fasta(fasta_file)
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
+            
         features = [self.kmer(seq, k) for seq in sequences]
         kmers = [''.join(p) for p in product(self.DNA_BASES, repeat=k)]
         feature_names = [f"DNA{k}mer_{kmer}" for kmer in kmers]
+        
+        if include_labels:
+            return ids, np.array(features), feature_names, labels
         return ids, np.array(features), feature_names
 
     # ==================== RCKmer ====================
@@ -93,9 +122,13 @@ class DNAFeatureExtractor:
         freqs = np.array([counts[kmer] for kmer in kmers])
         return freqs / total if normalize else freqs
 
-    def extract_rckmer(self, fasta_file, k=3):
+    def extract_rckmer(self, fasta_file, k=3, include_labels=False):
         """Extract reverse complement k-mer features"""
-        ids, sequences = self.read_fasta(fasta_file)
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
+            
         features = [self.rckmer(seq, k) for seq in sequences]
         
         # Generate canonical kmers for feature names
@@ -104,6 +137,9 @@ class DNAFeatureExtractor:
             canonical = min(''.join(kmer), self.reverse_complement(''.join(kmer)))
             kmers.add(canonical)
         feature_names = [f"DNA_RC{k}mer_{kmer}" for kmer in sorted(kmers)]
+        
+        if include_labels:
+            return ids, np.array(features), feature_names, labels
         return ids, np.array(features), feature_names
 
     # ==================== Mismatch ====================
@@ -136,12 +172,19 @@ class DNAFeatureExtractor:
                 mismatches.add(''.join(new_kmer))
         return sorted(mismatches)
 
-    def extract_mismatch(self, fasta_file, k=3, m=1):
+    def extract_mismatch(self, fasta_file, k=3, m=1, include_labels=False):
         """Extract mismatch features"""
-        ids, sequences = self.read_fasta(fasta_file)
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
+            
         features = [self.mismatch(seq, k, m) for seq in sequences]
         kmers = [''.join(p) for p in product(self.DNA_BASES, repeat=k)]
         feature_names = [f"DNA{k}mer_m{m}_{kmer}" for kmer in kmers]
+        
+        if include_labels:
+            return ids, np.array(features), feature_names, labels
         return ids, np.array(features), feature_names
 
     # ==================== Subsequence ====================
@@ -149,9 +192,9 @@ class DNAFeatureExtractor:
         """Subsequence profile (count of all possible k-length subsequences)"""
         return self.kmer(sequence, k, normalize)  # Same as kmer for DNA
 
-    def extract_subsequence(self, fasta_file, k=3):
+    def extract_subsequence(self, fasta_file, k=3, include_labels=False):
         """Extract subsequence profile features"""
-        return self.extract_kmer(fasta_file, k)  # Same as kmer for DNA
+        return self.extract_kmer(fasta_file, k, include_labels)  # Same as kmer for DNA
 
     # ==================== NAC ====================
     def nac(self, sequence, normalize=True):
@@ -164,11 +207,18 @@ class DNAFeatureExtractor:
         freqs = np.array([counts[base] / total for base in self.DNA_BASES])
         return freqs if normalize else np.array([counts[base] for base in self.DNA_BASES])
 
-    def extract_nac(self, fasta_file):
+    def extract_nac(self, fasta_file, include_labels=False):
         """Extract nucleotide composition features"""
-        ids, sequences = self.read_fasta(fasta_file)
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
+            
         features = [self.nac(seq) for seq in sequences]
         feature_names = [f"DNA_NAC_{base}" for base in self.DNA_BASES]
+        
+        if include_labels:
+            return ids, np.array(features), feature_names, labels
         return ids, np.array(features), feature_names
 
     # ==================== ANF ====================
@@ -186,13 +236,20 @@ class DNAFeatureExtractor:
             features.extend(cumsum / norm)
         return np.array(features)
 
-    def extract_anf(self, fasta_file, L=100):
+    def extract_anf(self, fasta_file, L=100, include_labels=False):
         """Extract ANF features"""
-        ids, sequences = self.read_fasta(fasta_file)
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
+            
         features = [self.anf(seq, L) for seq in sequences]
         feature_names = [f"DNA_ANF_{base}_p{i}" 
                         for base in self.DNA_BASES 
                         for i in range(L)]
+        
+        if include_labels:
+            return ids, np.array(features), feature_names, labels
         return ids, np.array(features), feature_names
 
     # ==================== ENAC ====================
@@ -208,9 +265,13 @@ class DNAFeatureExtractor:
             features.extend([counts[base]/window for base in self.DNA_BASES])
         return np.array(features)
 
-    def extract_enac(self, fasta_file, window=5):
+    def extract_enac(self, fasta_file, window=5, include_labels=False):
         """Extract ENAC features"""
-        ids, sequences = self.read_fasta(fasta_file)
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
+            
         min_len = min(len(seq) for seq in sequences)
         n_windows = max(1, min_len - window + 1)
         
@@ -222,69 +283,113 @@ class DNAFeatureExtractor:
         feature_names = [f"DNA_ENAC_{base}_w{i}" 
                         for i in range(n_windows) 
                         for base in self.DNA_BASES]
+        
+        if include_labels:
+            return ids, np.array(features), feature_names, labels
         return ids, np.array(features), feature_names
 
     # ==================== Unified Interface ====================
-    def extract_features(self, fasta_file, methods=['NAC'], params=None):
+    def extract_features(self, fasta_file, methods=['NAC'], params=None, include_labels=False):
         """
         Unified feature extraction interface
         :param fasta_file: Input FASTA file
         :param methods: List of methods to use
         :param params: Dictionary of parameters for specific methods
-        :return: (ids, features, feature_names)
+        :param include_labels: Whether to include automatically assigned labels
+        :return: (ids, features, feature_names) or (ids, features, feature_names, labels)
         """
         params = params or {}
         all_features = []
         all_names = []
         ids = None
+        labels = None
+        
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
         
         if 'Kmer' in methods:
             k = params.get('k', 3)
-            ids, features, names = self.extract_kmer(fasta_file, k)
+            features = [self.kmer(seq, k) for seq in sequences]
+            feature_names = [f"DNA{k}mer_{kmer}" for kmer in 
+                           [''.join(p) for p in product(self.DNA_BASES, repeat=k)]]
             all_features.append(features)
-            all_names.extend(names)
+            all_names.extend(feature_names)
         
         if 'RCKmer' in methods:
             k = params.get('k', 3)
-            ids, features, names = self.extract_rckmer(fasta_file, k)
+            features = [self.rckmer(seq, k) for seq in sequences]
+            kmers = set()
+            for kmer in product(self.DNA_BASES, repeat=k):
+                canonical = min(''.join(kmer), self.reverse_complement(''.join(kmer)))
+                kmers.add(canonical)
+            feature_names = [f"DNA_RC{k}mer_{kmer}" for kmer in sorted(kmers)]
             all_features.append(features)
-            all_names.extend(names)
+            all_names.extend(feature_names)
         
         if 'Mismatch' in methods:
             k = params.get('k', 3)
             m = params.get('m', 1)
-            ids, features, names = self.extract_mismatch(fasta_file, k, m)
+            features = [self.mismatch(seq, k, m) for seq in sequences]
+            feature_names = [f"DNA{k}mer_m{m}_{kmer}" for kmer in 
+                           [''.join(p) for p in product(self.DNA_BASES, repeat=k)]]
             all_features.append(features)
-            all_names.extend(names)
+            all_names.extend(feature_names)
         
         if 'Subsequence' in methods:
             k = params.get('k', 3)
-            ids, features, names = self.extract_subsequence(fasta_file, k)
+            features = [self.subsequence(seq, k) for seq in sequences]
+            feature_names = [f"DNA_Subseq{k}_{kmer}" for kmer in 
+                           [''.join(p) for p in product(self.DNA_BASES, repeat=k)]]
             all_features.append(features)
-            all_names.extend(names)
+            all_names.extend(feature_names)
         
         if 'NAC' in methods:
-            ids, features, names = self.extract_nac(fasta_file)
+            features = [self.nac(seq) for seq in sequences]
+            feature_names = [f"DNA_NAC_{base}" for base in self.DNA_BASES]
             all_features.append(features)
-            all_names.extend(names)
+            all_names.extend(feature_names)
         
         if 'ANF' in methods:
             L = params.get('L', 100)
-            ids, features, names = self.extract_anf(fasta_file, L)
+            features = [self.anf(seq, L) for seq in sequences]
+            feature_names = [f"DNA_ANF_{base}_p{i}" 
+                           for base in self.DNA_BASES 
+                           for i in range(L)]
             all_features.append(features)
-            all_names.extend(names)
+            all_names.extend(feature_names)
         
         if 'ENAC' in methods:
             window = params.get('window', 5)
-            ids, features, names = self.extract_enac(fasta_file, window)
+            min_len = min(len(seq) for seq in sequences)
+            n_windows = max(1, min_len - window + 1)
+            features = []
+            for seq in sequences:
+                feats = self.enac(seq, window)
+                features.append(feats[:n_windows*len(self.DNA_BASES)])
+            feature_names = [f"DNA_ENAC_{base}_w{i}" 
+                           for i in range(n_windows) 
+                           for base in self.DNA_BASES]
             all_features.append(features)
-            all_names.extend(names)
+            all_names.extend(feature_names)
         
         # Combine all features
         combined_features = np.hstack(all_features) if all_features else np.array([])
+        
+        if include_labels:
+            return ids, combined_features, all_names, labels
         return ids, combined_features, all_names
     
-    def to_csv(self, fasta_file, methods=['NAC'], params=None):
+    def to_csv(self, fasta_file, methods=['NAC'], params=None, include_labels=False):
         """Convert extracted features to CSV"""
-        ids, features, feature_names = self.extract_features(fasta_file, methods, params)
-        return self.features_to_csv(ids, features, feature_names)  # Call the renamed static method
+        if include_labels:
+            ids, features, feature_names, labels = self.extract_features(
+                fasta_file, methods, params, include_labels=True
+            )
+            return self.features_to_csv(ids, features, feature_names, labels)
+        else:
+            ids, features, feature_names = self.extract_features(
+                fasta_file, methods, params
+            )
+            return self.features_to_csv(ids, features, feature_names)

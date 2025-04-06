@@ -16,6 +16,7 @@ class ProteinFeatureExtractor:
     - DPC: Dipeptide Composition
     - DDE: Dipeptide Deviation from Expected mean
     - TPC: Tripeptide Composition
+    - Automatic label assignment based on sequence IDs
     """
     
     # Standard 20 amino acids
@@ -30,26 +31,45 @@ class ProteinFeatureExtractor:
         'T': -0.7, 'V': 4.2, 'W': -0.9, 'Y': -1.3
     }
     
-
-    
     @staticmethod
-    def read_fasta(file_path):
+    def assign_label(seq_id):
+        """Assign label based on sequence ID (0 for positive, 1 for negative)"""
+        seq_id = str(seq_id).lower()  # Convert to lowercase for case-insensitive check
+        if 'pos' in seq_id or 'p' in seq_id or '|0|' in seq_id:
+            return 0  # Positive class
+        return 1  # Negative class
+
+    @staticmethod
+    def read_fasta(file_path, include_labels=False):
         """Read protein sequences from FASTA file"""
         sequences = []
         ids = []
+        labels = []
         for record in SeqIO.parse(file_path, "fasta"):
             sequences.append(str(record.seq).upper())
             ids.append(record.id)
+            if include_labels:
+                labels.append(ProteinFeatureExtractor.assign_label(record.id))
+        if include_labels:
+            return ids, sequences, np.array(labels)
         return ids, sequences
     
     @staticmethod
-    def to_csvs(ids, features, feature_names):
+    def to_csvs(ids, features, feature_names, labels=None):
         """Convert features to CSV string"""
         csv_buffer = StringIO()
         writer = csv.writer(csv_buffer)
-        writer.writerow(['ID'] + feature_names)
-        for seq_id, feature_vec in zip(ids, features):
-            writer.writerow([seq_id] + list(feature_vec))
+        
+        # Include labels in header if provided
+        if labels is not None:
+            writer.writerow(['ID'] + feature_names + ['label'])
+            for seq_id, feature_vec, label in zip(ids, features, labels):
+                writer.writerow([seq_id] + list(feature_vec) + [label])
+        else:
+            writer.writerow(['ID'] + feature_names)
+            for seq_id, feature_vec in zip(ids, features):
+                writer.writerow([seq_id] + list(feature_vec))
+                
         return csv_buffer.getvalue()
 
     # ==================== AAC ====================
@@ -63,11 +83,18 @@ class ProteinFeatureExtractor:
             return np.array([counts[aa]/len(sequence) for aa in self.AMINO_ACIDS])
         return np.array([counts[aa] for aa in self.AMINO_ACIDS])
     
-    def extract_aac(self, fasta_file, normalize=True):
+    def extract_aac(self, fasta_file, normalize=True, include_labels=False):
         """Extract AAC features from FASTA"""
-        ids, sequences = self.read_fasta(fasta_file)
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
+            
         features = [self.aac(seq, normalize) for seq in sequences]
         feature_names = [f"AAC_{aa}" for aa in self.AMINO_ACIDS]
+        
+        if include_labels:
+            return ids, np.array(features), feature_names, labels
         return ids, np.array(features), feature_names
 
     # ==================== PAAC ====================
@@ -95,14 +122,21 @@ class ProteinFeatureExtractor:
         ])
         return paac_features
     
-    def extract_paac(self, fasta_file, lambda_val=5, w=0.05):
+    def extract_paac(self, fasta_file, lambda_val=5, w=0.05, include_labels=False):
         """Extract PAAC features"""
-        ids, sequences = self.read_fasta(fasta_file)
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
+            
         features = [self.paac(seq, lambda_val, w) for seq in sequences]
         feature_names = (
             [f"PAAC_AAC_{aa}" for aa in self.AMINO_ACIDS] +
             [f"PAAC_theta_{i}" for i in range(1, lambda_val + 1)]
         )
+        
+        if include_labels:
+            return ids, np.array(features), feature_names, labels
         return ids, np.array(features), feature_names
 
     # ==================== EAAC ====================
@@ -121,20 +155,28 @@ class ProteinFeatureExtractor:
                 features.extend([counts[aa] for aa in self.AMINO_ACIDS])
         return np.array(features)
     
-    def extract_eaac(self, fasta_file, window=5, normalize=True):
+    def extract_eaac(self, fasta_file, window=5, normalize=True, include_labels=False):
         """Extract EAAC features"""
-        ids, sequences = self.read_fasta(fasta_file)
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
+            
         min_len = min(len(seq) for seq in sequences)
         n_windows = max(1, min_len - window + 1)
         features = []
         for seq in sequences:
             feats = self.eaac(seq, window, normalize)
             features.append(feats[:n_windows*len(self.AMINO_ACIDS)])
+            
         feature_names = [
             f"EAAC_{aa}_w{i}" 
             for i in range(n_windows) 
             for aa in self.AMINO_ACIDS
         ]
+        
+        if include_labels:
+            return ids, np.array(features), feature_names, labels
         return ids, np.array(features), feature_names
 
     # ==================== CKSAAP ====================
@@ -154,9 +196,13 @@ class ProteinFeatureExtractor:
             return np.array([counts[pair]/total for pair in pairs])
         return np.array([counts[pair] for pair in pairs])
     
-    def extract_cksaap(self, fasta_file, k_max=5, normalize=True):
+    def extract_cksaap(self, fasta_file, k_max=5, normalize=True, include_labels=False):
         """Extract CKSAAP features for k=0 to k_max"""
-        ids, sequences = self.read_fasta(fasta_file)
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
+            
         pairs = [f"{a}{b}" for a in self.AMINO_ACIDS for b in self.AMINO_ACIDS]
         features = []
         
@@ -171,6 +217,9 @@ class ProteinFeatureExtractor:
             for k in range(k_max + 1) 
             for pair in pairs
         ]
+        
+        if include_labels:
+            return ids, np.array(features), feature_names, labels
         return ids, np.array(features), feature_names
 
     # ==================== DPC ====================
@@ -190,12 +239,19 @@ class ProteinFeatureExtractor:
             return np.array([counts[dp]/total for dp in dipeptides])
         return np.array([counts[dp] for dp in dipeptides])
     
-    def extract_dpc(self, fasta_file, normalize=True):
+    def extract_dpc(self, fasta_file, normalize=True, include_labels=False):
         """Extract DPC features"""
-        ids, sequences = self.read_fasta(fasta_file)
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
+            
         dipeptides = [f"{a}{b}" for a in self.AMINO_ACIDS for b in self.AMINO_ACIDS]
         features = [self.dpc(seq, normalize) for seq in sequences]
         feature_names = [f"DPC_{dp}" for dp in dipeptides]
+        
+        if include_labels:
+            return ids, np.array(features), feature_names, labels
         return ids, np.array(features), feature_names
 
     # ==================== DDE ====================
@@ -227,12 +283,19 @@ class ProteinFeatureExtractor:
         
         return np.array(features)
     
-    def extract_dde(self, fasta_file):
+    def extract_dde(self, fasta_file, include_labels=False):
         """Extract DDE features"""
-        ids, sequences = self.read_fasta(fasta_file)
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
+            
         dipeptides = [f"{a}{b}" for a in self.AMINO_ACIDS for b in self.AMINO_ACIDS]
         features = [self.dde(seq) for seq in sequences]
         feature_names = [f"DDE_{dp}" for dp in dipeptides]
+        
+        if include_labels:
+            return ids, np.array(features), feature_names, labels
         return ids, np.array(features), feature_names
 
     # ==================== TPC ====================
@@ -254,73 +317,126 @@ class ProteinFeatureExtractor:
             return np.array([counts[tp]/total for tp in tripeptides])
         return np.array([counts[tp] for tp in tripeptides])
     
-    def extract_tpc(self, fasta_file, normalize=True):
+    def extract_tpc(self, fasta_file, normalize=True, include_labels=False):
         """Extract TPC features"""
-        ids, sequences = self.read_fasta(fasta_file)
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
+            
         tripeptides = [f"{a}{b}{c}" for a in self.AMINO_ACIDS 
                       for b in self.AMINO_ACIDS 
                       for c in self.AMINO_ACIDS]
         features = [self.tpc(seq, normalize) for seq in sequences]
         feature_names = [f"TPC_{tp}" for tp in tripeptides]
+        
+        if include_labels:
+            return ids, np.array(features), feature_names, labels
         return ids, np.array(features), feature_names
 
     # ==================== Unified Interface ====================
-    def extract_features(self, fasta_file, methods, params):
+    def extract_features(self, fasta_file, methods, params, include_labels=False):
         """
         Unified feature extraction interface
         :param fasta_file: Input FASTA file
         :param methods: List of methods to use (AAC, PAAC, EAAC, CKSAAP, DPC, DDE, TPC)
         :param params: Additional parameters for specific methods
-        :return: (ids, features, feature_names)
+        :param include_labels: Whether to include automatically assigned labels
+        :return: (ids, features, feature_names) or (ids, features, feature_names, labels)
         """
         all_features = []
         all_names = []
         ids = None
+        labels = None
+        
+        if include_labels:
+            ids, sequences, labels = self.read_fasta(fasta_file, include_labels=True)
+        else:
+            ids, sequences = self.read_fasta(fasta_file)
         
         if 'AAC' in methods:
-            ids, features, names = self.extract_aac(fasta_file)
+            result = self.extract_aac(fasta_file, include_labels=include_labels)
+            if include_labels:
+                _, features, names, _ = result
+            else:
+                _, features, names = result
             all_features.append(features)
             all_names.extend(names)
         
         if 'PAAC' in methods:
             lambda_val = params.get('lambda_val', 5)
             w = params.get('w', 0.05)
-            ids, features, names = self.extract_paac(fasta_file, lambda_val, w)
+            result = self.extract_paac(fasta_file, lambda_val, w, include_labels=include_labels)
+            if include_labels:
+                _, features, names, _ = result
+            else:
+                _, features, names = result
             all_features.append(features)
             all_names.extend(names)
         
         if 'EAAC' in methods:
             window = params.get('window', 5)
-            ids, features, names = self.extract_eaac(fasta_file, window)
+            result = self.extract_eaac(fasta_file, window, include_labels=include_labels)
+            if include_labels:
+                _, features, names, _ = result
+            else:
+                _, features, names = result
             all_features.append(features)
             all_names.extend(names)
         
         if 'CKSAAP' in methods:
             k_max = params.get('k_max', 5)
-            ids, features, names = self.extract_cksaap(fasta_file, k_max)
+            result = self.extract_cksaap(fasta_file, k_max, include_labels=include_labels)
+            if include_labels:
+                _, features, names, _ = result
+            else:
+                _, features, names = result
             all_features.append(features)
             all_names.extend(names)
         
         if 'DPC' in methods:
-            ids, features, names = self.extract_dpc(fasta_file)
+            result = self.extract_dpc(fasta_file, include_labels=include_labels)
+            if include_labels:
+                _, features, names, _ = result
+            else:
+                _, features, names = result
             all_features.append(features)
             all_names.extend(names)
         
         if 'DDE' in methods:
-            ids, features, names = self.extract_dde(fasta_file)
+            result = self.extract_dde(fasta_file, include_labels=include_labels)
+            if include_labels:
+                _, features, names, _ = result
+            else:
+                _, features, names = result
             all_features.append(features)
             all_names.extend(names)
         
         if 'TPC' in methods:
-            ids, features, names = self.extract_tpc(fasta_file)
+            result = self.extract_tpc(fasta_file, include_labels=include_labels)
+            if include_labels:
+                _, features, names, _ = result
+            else:
+                _, features, names = result
             all_features.append(features)
             all_names.extend(names)
         
         # Combine all features
         combined_features = np.hstack(all_features) if all_features else np.array([])
+        
+        if include_labels:
+            return ids, combined_features, all_names, labels
         return ids, combined_features, all_names
     
-    def to_csv(self, fasta_file, methods, params):
+    def to_csv(self, fasta_file, methods, params, include_labels=False):
         """Convert extracted features to CSV"""
-        ids, features, feature_names = self.extract_features(fasta_file, methods, params)
-        return self.to_csvs(ids, features, feature_names)
+        if include_labels:
+            ids, features, feature_names, labels = self.extract_features(
+                fasta_file, methods, params, include_labels=True
+            )
+            return self.to_csvs(ids, features, feature_names, labels)
+        else:
+            ids, features, feature_names = self.extract_features(
+                fasta_file, methods, params
+            )
+            return self.to_csvs(ids, features, feature_names)

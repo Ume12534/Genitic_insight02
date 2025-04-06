@@ -1,43 +1,34 @@
-from django.shortcuts import render
-from django.http import HttpResponse, JsonResponse, FileResponse
-from Genitic_insight.forms import FastaUploadForm 
-from Bio import SeqIO
-from io import TextIOWrapper
+# Standard library imports
 import os
-import time  # Added import for time module
-import pandas as pd
-import numpy as np
+import sys
+import time
+import json
+import csv
+from pathlib import Path
+from io import StringIO, TextIOWrapper
+
+# Django imports
+from django.shortcuts import render, redirect
+from django.http import HttpResponse, JsonResponse, FileResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
 from django.core.files.storage import default_storage
 from django.conf import settings
-import sys
-from pathlib import Path
-# views.py
 
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
-from django.views.decorators.csrf import csrf_exempt
-# Add your project root to Python path
-project_root = Path(__file__).resolve().parent.parent  # Adjust based on your structure
-sys.path.append(str(project_root))
+# BioPython import
+from Bio import SeqIO
 
-from .proteinfeature import ProteinFeatureExtractor
-from .RNAfeature import RNAFeatureExtractor
-from .DNAfeature import DNAFeatureExtractor
-import csv
-import json
-from django.http import JsonResponse
-from django.views.decorators.http import require_POST
-from io import StringIO
+# Data science imports
+import pandas as pd
+import numpy as np
+from sklearn.metrics import (
+    roc_curve, auc, accuracy_score, 
+    precision_score, recall_score, 
+    f1_score, confusion_matrix
+)
 from sklearn.model_selection import train_test_split
-from django.shortcuts import render, redirect
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, BaggingClassifier, GradientBoostingClassifier
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
-import joblib
-from io import TextIOWrapper, StringIO
 from sklearn.ensemble import (
-    RandomForestClassifier, AdaBoostClassifier, 
+    RandomForestClassifier, AdaBoostClassifier,
     BaggingClassifier, GradientBoostingClassifier
 )
 from sklearn.tree import DecisionTreeClassifier
@@ -46,26 +37,52 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.discriminant_analysis import (
-    LinearDiscriminantAnalysis, 
+    LinearDiscriminantAnalysis,
     QuadraticDiscriminantAnalysis
 )
 from sklearn.naive_bayes import GaussianNB
+import joblib
 
-# Check for optional ML packages
+# Local imports
+from Genitic_insight.forms import FastaUploadForm
+from .utils.proteinfeature import ProteinFeatureExtractor
+from .utils.RNAfeature import RNAFeatureExtractor
+from .utils.DNAfeature import DNAFeatureExtractor
+from django.http import JsonResponse
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score, 
+    confusion_matrix, roc_curve, auc, precision_recall_curve, 
+    mean_squared_error, mean_absolute_error, r2_score
+)
+
+from sklearn.preprocessing import LabelEncoder
+
+
+
+# Optional ML packages
+XGBOOST_AVAILABLE = False
+LIGHTGBM_AVAILABLE = False
+
 try:
     from xgboost import XGBClassifier
     XGBOOST_AVAILABLE = True
 except ImportError:
-    XGBOOST_AVAILABLE = False
+    pass
 
 try:
     from lightgbm import LGBMClassifier
     LIGHTGBM_AVAILABLE = True
 except ImportError:
-    LIGHTGBM_AVAILABLE = False
+    pass
 
+# Add project root to Python path
+project_root = Path(__file__).resolve().parent.parent  # Adjust based on your structure
+sys.path.append(str(project_root))
 # Create your views here.
 
+
+
+# views
 
 # Home
 def home(request):
@@ -82,54 +99,56 @@ def detect_sequence_type(sequence):
     Returns:
         str: "DNA", "RNA", "Protein", or "Unknown"
     """
-    # Define character sets
-    protein_chars = set("ACDEFGHIKLMNPQRSTVWY*")
-    dna_chars = set("ATCGN")
-    rna_chars = set("AUCGN")
-    ambiguous_dna = set("BDHKMNRSVWY")
-    ambiguous_rna = set("BDHKMNRSVWY")
-    
-    # Clean and validate input
     if not sequence:
         return "Unknown"
         
+    # Clean and standardize the sequence
     sequence = sequence.upper().strip()
-    sequence = ''.join([c for c in sequence if c.isalpha() or c == '*'])
+    sequence = ''.join([c for c in sequence if c.isalpha() or c in {'*', '-'}])
     
     if not sequence:
         return "Unknown"
     
-    # Check for protein markers
-    has_protein_chars = any(c in protein_chars for c in sequence)
-    has_stop_codon = '*' in sequence
+    # Define character sets
+    protein_chars = set("ACDEFGHIKLMNPQRSTVWY*")
+    dna_chars = set("ATCG")
+    rna_chars = set("AUCG")
+    ambiguous_nuc = set("BDHKMNRSVWY-")
     
-    # Check for nucleic acid markers
-    has_dna = any(c in dna_chars for c in sequence)
-    has_rna = any(c in rna_chars for c in sequence)
-    has_u = 'U' in sequence
-    has_t = 'T' in sequence
+    # Get unique characters in sequence
+    seq_chars = set(sequence)
+    
+    # Check for unambiguous protein characters
+    protein_markers = protein_chars - dna_chars - rna_chars - ambiguous_nuc
+    has_protein_markers = any(c in protein_markers for c in seq_chars)
+    
+    # Check for stop codon (protein marker)
+    has_stop = '*' in seq_chars
+    
+    # Check for U (RNA) or T (DNA)
+    has_u = 'U' in seq_chars
+    has_t = 'T' in seq_chars
     
     # Detection logic
-    if has_protein_chars and not (has_dna or has_rna):
+    if has_protein_markers or has_stop:
         return "Protein"
     
     if has_u and not has_t:
-        if any(c in rna_chars or c in ambiguous_rna for c in sequence):
+        if seq_chars.issubset(rna_chars | ambiguous_nuc):
             return "RNA"
     
     if has_t and not has_u:
-        if any(c in dna_chars or c in ambiguous_dna for c in sequence):
+        if seq_chars.issubset(dna_chars | ambiguous_nuc):
             return "DNA"
     
-    # Handle ambiguous cases
+    # Handle ambiguous cases (no U/T and no protein markers)
     if not has_u and not has_t:
-        if has_protein_chars:
+        if seq_chars.issubset(dna_chars | ambiguous_nuc):
+            return "DNA"
+        if seq_chars.issubset(protein_chars):
             return "Protein"
-        if len(sequence) >= 3 and len(sequence) % 3 == 0:
-            return "Protein" if has_protein_chars else "DNA"
     
     return "Unknown"
-
 # feature_extraction
 def feature_extraction(request):
     if request.method == 'POST' and request.FILES.get('fasta_file'):
@@ -198,21 +217,24 @@ def analyze_sequence(request):
                 csv_data = extractor.to_csv(
                     file_path,
                     methods=[descriptor],
-                    params=params_dict
+                    params=params_dict,
+                    include_labels=True
                 )
             elif sequence_type == 'DNA':
                 extractor = DNAFeatureExtractor()
                 csv_data = extractor.to_csv(
                     file_path,
                     methods=[descriptor],
-                    params=params_dict
+                    params=params_dict,
+                    include_labels=True
                 )
             elif sequence_type == 'RNA':
                 extractor = RNAFeatureExtractor()
                 csv_data = extractor.to_csv(
                     file_path,
                     methods=[descriptor],
-                    params=params_dict
+                    params=params_dict,
+                    include_labels=True
                 )
             else:
                 raise ValueError(f"Unknown sequence type: {sequence_type}")
@@ -240,25 +262,9 @@ def analyze_sequence(request):
     return JsonResponse({'error': 'Invalid request'}, status=400)
 
 
-# @require_POST
-# def save_extracted_data(request):
-#     """Save extracted features to session"""
-#     if request.method == 'POST':
-#         try:
-#             data = json.loads(request.body)
-#             csv_data = data.get('csv_data', '')
-#             request.session['extracted_features'] = csv_data
-#             request.session.modified = True
-#             return JsonResponse({'status': 'success'})
-#         except Exception as e:
-#             return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
-#     return JsonResponse({'status': 'error'}, status=400)
-
 def module_selection(request):
     """Render module selection page with available algorithms"""
     return render(request, 'module_selection.html')
-
-
 
 
 @csrf_exempt
@@ -266,8 +272,11 @@ def train_model(request):
     if request.method == 'POST':
         try:
             # Validate file upload
-            if 'dataset_file' not in request.FILES:
+            file_option = request.POST.get('file_option')
+            if file_option == 'single' and 'dataset_file' not in request.FILES:
                 return JsonResponse({'error': 'No dataset file provided'}, status=400)
+            elif file_option == 'separate' and ('training_file' not in request.FILES or 'testing_file' not in request.FILES):
+                return JsonResponse({'error': 'Both training and testing files are required'}, status=400)
             
             # Validate parameters
             try:
@@ -278,20 +287,88 @@ def train_model(request):
                 return JsonResponse({'error': 'Invalid train percentage (must be integer between 1-99)'}, status=400)
             
             algorithm = request.POST.get('algorithm')
+            target_column = request.POST.get('target_column', 'label')  # Default to 'label' column
             
-            # Process file
+            # Process files
             try:
-                df = pd.read_csv(request.FILES['dataset_file'])
-                if len(df.columns) < 2:
-                    return JsonResponse({'error': 'Dataset must have at least 2 columns (features + target)'}, status=400)
+                if file_option == 'single':
+                    df = pd.read_csv(request.FILES['dataset_file'])
+                    if len(df.columns) < 2:
+                        return JsonResponse({'error': 'Dataset must have at least 2 columns (features + target)'}, status=400)
+                    
+                    # Handle target column (either by name or index)
+                    try:
+                        # First try to convert to integer (for index)
+                        target_col_idx = int(target_column)
+                        if target_col_idx == -1:
+                            target_col_idx = len(df.columns) - 1
+                        if target_col_idx >= len(df.columns) or target_col_idx < 0:
+                            return JsonResponse({'error': f'Target column index {target_col_idx} is out of range (0-{len(df.columns)-1})'}, status=400)
+                        target_column_name = df.columns[target_col_idx]
+                    except ValueError:
+                        # If not an integer, treat as column name
+                        if target_column not in df.columns:
+                            return JsonResponse({'error': f'Target column "{target_column}" not found in dataset. Available columns: {list(df.columns)}'}, status=400)
+                        target_column_name = target_column
+                    
+                    X = df.drop(target_column_name, axis=1)
+                    y = df[target_column_name]
+                    
+                    # Convert y to numeric if it's categorical
+                    if y.dtype == 'object':
+                        le = LabelEncoder()
+                        y = le.fit_transform(y)
+                    
+                    X_train, X_test, y_train, y_test = train_test_split(
+                        X, y, train_size=train_percent/100, random_state=42, stratify=y
+                    )
+                else:  # separate files
+                    train_df = pd.read_csv(request.FILES['training_file'])
+                    test_df = pd.read_csv(request.FILES['testing_file'])
+                    
+                    if len(train_df.columns) < 2 or len(test_df.columns) < 2:
+                        return JsonResponse({'error': 'Files must have at least 2 columns (features + target)'}, status=400)
+                    
+                    # Handle target column for separate files
+                    try:
+                        # First try to convert to integer (for index)
+                        target_col_idx = int(target_column)
+                        if target_col_idx == -1:
+                            target_col_idx = len(train_df.columns) - 1
+                        if target_col_idx >= len(train_df.columns) or target_col_idx < 0:
+                            return JsonResponse({'error': f'Target column index {target_col_idx} is out of range (0-{len(train_df.columns)-1})'}, status=400)
+                        target_column_name = train_df.columns[target_col_idx]
+                    except ValueError:
+                        # If not an integer, treat as column name
+                        if target_column not in train_df.columns or target_column not in test_df.columns:
+                            return JsonResponse({'error': f'Target column "{target_column}" not found in both files'}, status=400)
+                        target_column_name = target_column
+                    
+                    X_train = train_df.drop(target_column_name, axis=1)
+                    y_train = train_df[target_column_name]
+                    X_test = test_df.drop(target_column_name, axis=1)
+                    y_test = test_df[target_column_name]
+                    
+                    # Convert y to numeric if it's categorical
+                    if y_train.dtype == 'object':
+                        le = LabelEncoder()
+                        y_train = le.fit_transform(y_train)
+                        y_test = le.transform(y_test)
             except Exception as e:
-                return JsonResponse({'error': f'Error reading CSV file: {str(e)}'}, status=400)
-            
-            X = df.iloc[:, :-1]  # Assume last column is target
-            y = df.iloc[:, -1]
+                return JsonResponse({'error': f'Error processing data: {str(e)}'}, status=400)
             
             # Determine problem type
-            problem_type = 'classification' if y.dtype == 'object' or len(y.unique()) < 10 else 'regression'
+            unique_classes = np.unique(y_train)
+            if len(unique_classes) <= 10 or y_train.dtype == 'object':
+                problem_type = 'classification'
+                # For binary classification, we need exactly 2 classes
+                if len(unique_classes) == 2:
+                    binary_classification = True
+                else:
+                    binary_classification = False
+            else:
+                problem_type = 'regression'
+                binary_classification = False
             
             # Validate algorithm based on problem type
             regression_algorithms = ['linear_regression', 'random_forest_regressor', 'svm_regressor']
@@ -302,63 +379,107 @@ def train_model(request):
             elif problem_type == 'classification' and algorithm not in classification_algorithms:
                 return JsonResponse({'error': f'Selected algorithm is not suitable for classification problems. Please use: {", ".join(classification_algorithms)}'}, status=400)
             
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, train_size=train_percent/100, random_state=42
-            )
-            
             # Train selected model
-            if algorithm == 'linear_regression':
-                from sklearn.linear_model import LinearRegression
-                model = LinearRegression()
-            elif algorithm == 'logistic_regression':
-                from sklearn.linear_model import LogisticRegression
-                model = LogisticRegression()
-            elif algorithm == 'random_forest':
-                from sklearn.ensemble import RandomForestClassifier
-                model = RandomForestClassifier()
-            elif algorithm == 'random_forest_regressor':
-                from sklearn.ensemble import RandomForestRegressor
-                model = RandomForestRegressor()
-            elif algorithm == 'decision_tree':
-                from sklearn.tree import DecisionTreeClassifier
-                model = DecisionTreeClassifier()
-            elif algorithm == 'svm':
-                from sklearn.svm import SVC
-                model = SVC()
-            elif algorithm == 'svm_regressor':
-                from sklearn.svm import SVR
-                model = SVR()
-            elif algorithm == 'knn':
-                from sklearn.neighbors import KNeighborsClassifier
-                model = KNeighborsClassifier()
-            elif algorithm == 'neural_network':
-                from sklearn.neural_network import MLPClassifier
-                model = MLPClassifier()
-            else:
-                return JsonResponse({'error': 'Invalid algorithm selected'})
-            
-            model.fit(X_train, y_train)
-            y_pred = model.predict(X_test)
+            try:
+                if algorithm == 'linear_regression':
+                    from sklearn.linear_model import LinearRegression
+                    model = LinearRegression()
+                elif algorithm == 'logistic_regression':
+                    from sklearn.linear_model import LogisticRegression
+                    model = LogisticRegression(max_iter=1000)
+                elif algorithm == 'random_forest':
+                    from sklearn.ensemble import RandomForestClassifier
+                    model = RandomForestClassifier()
+                elif algorithm == 'random_forest_regressor':
+                    from sklearn.ensemble import RandomForestRegressor
+                    model = RandomForestRegressor()
+                elif algorithm == 'decision_tree':
+                    from sklearn.tree import DecisionTreeClassifier
+                    model = DecisionTreeClassifier()
+                elif algorithm == 'svm':
+                    from sklearn.svm import SVC
+                    model = SVC(probability=True)
+                elif algorithm == 'svm_regressor':
+                    from sklearn.svm import SVR
+                    model = SVR()
+                elif algorithm == 'knn':
+                    from sklearn.neighbors import KNeighborsClassifier
+                    model = KNeighborsClassifier()
+                elif algorithm == 'neural_network':
+                    from sklearn.neural_network import MLPClassifier
+                    model = MLPClassifier(max_iter=1000)
+                else:
+                    return JsonResponse({'error': 'Invalid algorithm selected'})
+                
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+            except Exception as e:
+                return JsonResponse({'error': f'Error training model: {str(e)}'}, status=400)
             
             # Calculate metrics based on problem type
+            results = {}
             if problem_type == 'classification':
-                from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
-                accuracy = accuracy_score(y_test, y_pred)
-                precision = precision_score(y_test, y_pred, average='weighted')
-                recall = recall_score(y_test, y_pred, average='weighted')
-                f1 = f1_score(y_test, y_pred, average='weighted')
+                # Calculate basic classification metrics
                 cm = confusion_matrix(y_test, y_pred)
+                
+                # For binary classification, we can calculate ROC/AUC
+                roc_data = None
+                pr_data = None
+                if binary_classification:
+                    try:
+                        # Get probability scores for ROC curve
+                        if hasattr(model, 'predict_proba'):
+                            y_scores = model.predict_proba(X_test)[:, 1]
+                        else:  # For models that don't do probability estimates
+                            y_scores = model.decision_function(X_test)
+                            y_scores = (y_scores - y_scores.min()) / (y_scores.max() - y_scores.min())
+                        
+                        # Calculate ROC curve and AUC
+                        fpr, tpr, _ = roc_curve(y_test, y_scores)
+                        roc_auc = auc(fpr, tpr)
+                        
+                        # Calculate Precision-Recall curve and AUC
+                        precision, recall, _ = precision_recall_curve(y_test, y_scores)
+                        pr_auc = auc(recall, precision)
+                        
+                        roc_data = {
+                            'fpr': fpr.tolist(),
+                            'tpr': tpr.tolist(),
+                            'auc': roc_auc
+                        }
+                        
+                        pr_data = {
+                            'precision': precision.tolist(),
+                            'recall': recall.tolist(),
+                            'auprc': pr_auc
+                        }
+                    except Exception as e:
+                        # If ROC calculation fails, continue without it
+                        pass
+                
+                # Calculate classification metrics
+                accuracy = accuracy_score(y_test, y_pred)
+                precision_score_val = precision_score(y_test, y_pred, average='weighted')
+                recall_score_val = recall_score(y_test, y_pred, average='weighted')
+                f1 = f1_score(y_test, y_pred, average='weighted')
                 
                 results = {
                     'problem_type': 'classification',
                     'accuracy': accuracy,
-                    'precision': precision,
-                    'recall': recall,
+                    'precision': precision_score_val,
+                    'recall': recall_score_val,
                     'f1_score': f1,
                     'confusion_matrix': cm.tolist(),
+                    'classes': unique_classes.tolist(),
+                    'binary_classification': binary_classification,
                 }
+                
+                if roc_data:
+                    results['roc_curve'] = roc_data
+                if pr_data:
+                    results['pr_curve'] = pr_data
+                
             else:  # regression
-                from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
                 mse = mean_squared_error(y_test, y_pred)
                 mae = mean_absolute_error(y_test, y_pred)
                 r2 = r2_score(y_test, y_pred)
@@ -374,6 +495,7 @@ def train_model(request):
             return JsonResponse({
                 'algorithm': algorithm.replace('_', ' ').title(),
                 'problem_type': problem_type,
+                'target_column': target_column_name,
                 **results
             })
             
@@ -381,106 +503,6 @@ def train_model(request):
             return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)
     
     return JsonResponse({'error': 'Only POST requests are allowed'}, status=405)
-# def load_training_data(request):
-#     """Load training data based on input method"""
-#     if 'use_extracted' in request.POST:
-#         # Use extracted features from session
-#         csv_data = request.session.get('extracted_features', '')
-#         if not csv_data:
-#             return None, None, None, None
-#         df = pd.read_csv(StringIO(csv_data))
-#         X = df.iloc[:, :-1]  # Features
-#         y = df.iloc[:, -1]   # Target
-#         return train_test_split(X, y, test_size=0.2, random_state=42)
-    
-#     elif 'dataset_file' in request.FILES:
-#         # Single file with split ratio
-#         df = pd.read_csv(request.FILES['dataset_file'])
-#         X = df.iloc[:, :-1]
-#         y = df.iloc[:, -1]
-#         test_size = int(request.POST.get('test_percent', 20)) / 100
-#         return train_test_split(X, y, test_size=test_size, random_state=42)
-    
-#     elif 'training_file' in request.FILES and 'testing_file' in request.FILES:
-#         # Separate training and testing files
-#         train_df = pd.read_csv(request.FILES['training_file'])
-#         test_df = pd.read_csv(request.FILES['testing_file'])
-#         return (
-#             train_df.iloc[:, :-1],  # X_train
-#             test_df.iloc[:, :-1],   # X_test
-#             train_df.iloc[:, -1],   # y_train
-#             test_df.iloc[:, -1]     # y_test
-#         )
-    
-#     return None, None, None, None
-
-# def initialize_model(algorithm):
-#     """Initialize the selected ML model"""
-#     models = {
-#         'random_forest': (RandomForestClassifier(n_estimators=100, random_state=42), "Random Forest"),
-#         'decision_tree': (DecisionTreeClassifier(random_state=42), "Decision Tree"),
-#         'svm': (SVC(random_state=42, probability=True), "Support Vector Machine"),
-#         'mlp': (MLPClassifier(random_state=42), "Multi-layer Perceptron"),
-#         'knn': (KNeighborsClassifier(), "K-Nearest Neighbors"),
-#         'logistic_regression': (LogisticRegression(random_state=42), "Logistic Regression"),
-#         'lda': (LinearDiscriminantAnalysis(), "Linear Discriminant Analysis"),
-#         'qda': (QuadraticDiscriminantAnalysis(), "Quadratic Discriminant Analysis"),
-#         'sgd': (SGDClassifier(random_state=42), "Stochastic Gradient Descent"),
-#         'naive_bayes': (GaussianNB(), "Naive Bayes"),
-#         'bagging': (BaggingClassifier(random_state=42), "Bagging Classifier"),
-#         'adaboost': (AdaBoostClassifier(random_state=42), "AdaBoost"),
-#         'gbdt': (GradientBoostingClassifier(random_state=42), "Gradient Boosted Decision Trees")
-#     }
-    
-#     # Add optional models if available
-#     if XGBOOST_AVAILABLE and algorithm == 'xgboost':
-#         models['xgboost'] = (XGBClassifier(random_state=42), "XGBoost")
-#     if LIGHTGBM_AVAILABLE and algorithm == 'lightgbm':
-#         models['lightgbm'] = (LGBMClassifier(random_state=42), "LightGBM")
-    
-#     if algorithm not in models:
-#         raise ValueError(f"Invalid algorithm selected: {algorithm}")
-    
-#     return models[algorithm]
-
-# def evaluate_model(model, X_test, y_test):
-#     """Evaluate model performance"""
-#     y_pred = model.predict(X_test)
-#     return {
-#         'accuracy': accuracy_score(y_test, y_pred),
-#         'precision': precision_score(y_test, y_pred, average='weighted'),
-#         'recall': recall_score(y_test, y_pred, average='weighted'),
-#         'f1_score': f1_score(y_test, y_pred, average='weighted')
-#     }
-
-# def save_model_to_disk(model, request):
-#     """Save trained model to disk"""
-#     model_dir = os.path.join(settings.MEDIA_ROOT, 'trained_models')
-#     os.makedirs(model_dir, exist_ok=True)
-#     model_path = os.path.join(model_dir, f'model_{request.session.session_key}.pkl')
-#     joblib.dump(model, model_path)
-#     return model_path
-
-# def prepare_results(model_name, metrics, features, model_path):
-#     """Prepare training results dictionary"""
-#     return {
-#         'model_name': model_name,
-#         'accuracy': round(metrics['accuracy'], 4),
-#         'precision': round(metrics['precision'], 4),
-#         'recall': round(metrics['recall'], 4),
-#         'f1_score': round(metrics['f1_score'], 4),
-#         'features_used': list(features),
-#         'model_path': model_path
-#     }
-
-# def training_results(request):
-#     """Display training results"""
-#     results = request.session.get('training_results')
-#     if not results:
-#         return redirect('module_selection')
-#     return render(request, 'training_results.html', {'results': results})
-
-
 
 
 def make_predictions(request):
