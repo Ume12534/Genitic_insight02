@@ -18,7 +18,6 @@ urlpatterns = [
 
     path('train-model/', views.train_model, name='train_model'),
 
-    # path('training-results/', views.training_results, name='training_results'),
-
-    # path('predict/', views.make_predictions, name='make_predictions'),
-]
+    path('module-selection-with-features/', views.module_selection_with_features, name='module_selection_with_features'),
+    
+    path('train-model-with-features/', views.train_model_with_features, name='train_model_with_features')]

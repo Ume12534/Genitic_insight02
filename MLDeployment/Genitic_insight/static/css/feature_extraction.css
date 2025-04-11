@@ -1,7 +1,4 @@
-.navbar {
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    background: rgba(255, 255, 255, 0.95);
-}
+
 
 footer {
     background: #1f4c6b;
@@ -16,11 +13,6 @@ footer {
     --accent-color: #e74c3c;
 }
 
-body {
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    line-height: 1.6;
-    color: var(--primary-color);
-}
 
 
 
