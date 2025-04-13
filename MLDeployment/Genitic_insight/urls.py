@@ -20,4 +20,6 @@ urlpatterns = [
 
     path('module-selection-with-features/', views.module_selection_with_features, name='module_selection_with_features'),
     
-    path('train-model-with-features/', views.train_model_with_features, name='train_model_with_features')]
+    path('train-model-with-features/', views.train_model_with_features, name='train_model_with_features'),
+
+    ]

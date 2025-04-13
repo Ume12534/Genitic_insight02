@@ -6,6 +6,9 @@ import json
 import csv
 from pathlib import Path
 from io import StringIO, TextIOWrapper
+import uuid
+import tempfile
+from venv import logger
 
 # Django imports
 from django.shortcuts import render, redirect
@@ -81,6 +84,11 @@ except ImportError:
 # Add project root to Python path
 project_root = Path(__file__).resolve().parent.parent  # Adjust based on your structure
 sys.path.append(str(project_root))
+
+# Global dictionary to store extracted feature data between requests
+EXTRACTED_DATA_STORE = {}
+
+
 # Create your views here.
 
 
@@ -152,24 +160,25 @@ def detect_sequence_type(sequence):
             return "Protein"
     
     return "Unknown"
-# feature_extraction
+
 def feature_extraction(request):
     if request.method == 'POST' and request.FILES.get('fasta_file'):
         try:
-            fasta_file = TextIOWrapper(request.FILES['fasta_file'].file, encoding='utf-8')
-            record = next(SeqIO.parse(fasta_file, "fasta"))
-            sequence = str(record.seq)
-            
-            response_data = {
-                'sequence_type': detect_sequence_type(sequence),
-                'sequence_id': record.id,
-                'sequence_preview': sequence[:100] + ('...' if len(sequence) > 100 else ''),
-                'length': len(sequence)
-            }
-            
-            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                return JsonResponse(response_data)
-            return render(request, 'feature_extraction.html', response_data)
+            # Use TextIOWrapper in a 'with' block to ensure it closes
+            with TextIOWrapper(request.FILES['fasta_file'].file, encoding='utf-8') as fasta_file:
+                record = next(SeqIO.parse(fasta_file, "fasta"))
+                sequence = str(record.seq)
+                
+                response_data = {
+                    'sequence_type': detect_sequence_type(sequence),
+                    'sequence_id': record.id,
+                    'sequence_preview': sequence[:100] + ('...' if len(sequence) > 100 else ''),
+                    'length': len(sequence)
+                }
+                
+                if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                    return JsonResponse(response_data)
+                return render(request, 'feature_extraction.html', response_data)
 
         except Exception as e:
             error_response = {'error': str(e)}
@@ -182,6 +191,7 @@ def feature_extraction(request):
 def analyze_sequence(request):
     """
     Handle sequence feature extraction request and return CSV data without ID column.
+    Updated to handle temporary file storage and cleanup with proper file handling.
     
     Args:
         request: Django HTTP request object containing:
@@ -195,6 +205,10 @@ def analyze_sequence(request):
             - Metadata about the analysis
     """
     if request.method == 'POST' and request.FILES.get('fasta_file'):
+        # Initialize file paths for cleanup
+        input_file_path = None
+        output_file_path = None
+        
         try:
             # =============================================
             # 1. GET REQUEST PARAMETERS AND VALIDATE INPUTS
@@ -205,20 +219,49 @@ def analyze_sequence(request):
             parameters_str = request.POST.get('parameter', '') 
             
             # =============================================
-            # 2. SAVE UPLOADED FILE TEMPORARILY
+            # 2. SETUP TEMPORARY STORAGE LOCATION
             # =============================================
-            # Create temp directory if it doesn't exist
+            # Create temp directories if they don't exist
             temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp')
-            os.makedirs(temp_dir, exist_ok=True)
+            temp_input_dir = os.path.join(temp_dir, 'input')
+            temp_output_dir = os.path.join(temp_dir, 'output')
             
-            # Save the uploaded file
-            file_path = os.path.join(temp_dir, fasta_file.name)
-            with open(file_path, 'wb+') as destination:
-                for chunk in fasta_file.chunks():
-                    destination.write(chunk)
+            os.makedirs(temp_input_dir, exist_ok=True)
+            os.makedirs(temp_output_dir, exist_ok=True)
+            
+            # Clean up any previous temporary files
+            for f in os.listdir(temp_input_dir):
+                try:
+                    os.remove(os.path.join(temp_input_dir, f))
+                except PermissionError:
+                    continue  # Skip files that can't be deleted
+            for f in os.listdir(temp_output_dir):
+                try:
+                    os.remove(os.path.join(temp_output_dir, f))
+                except PermissionError:
+                    continue
             
             # =============================================
-            # 3. PROCESS PARAMETERS
+            # 3. SAVE UPLOADED FILE TO TEMP LOCATION
+            # =============================================
+            # Generate unique filename to prevent collisions
+            import uuid
+            unique_id = uuid.uuid4().hex
+            input_file_path = os.path.join(temp_input_dir, f"{unique_id}_{fasta_file.name}")
+            
+            # Safely save the uploaded file with error handling
+            try:
+                with open(input_file_path, 'wb+') as destination:
+                    for chunk in fasta_file.chunks():
+                        destination.write(chunk)
+            except IOError as e:
+                return JsonResponse({
+                    'error': 'File save failed',
+                    'details': str(e)
+                }, status=500)
+            
+            # =============================================
+            # 4. PROCESS PARAMETERS
             # =============================================
             params_dict = {}
             if parameters_str:
@@ -237,39 +280,46 @@ def analyze_sequence(request):
                     params_dict = {}  # Use empty dict if parsing fails
             
             # =============================================
-            # 4. PERFORM FEATURE EXTRACTION BASED ON SEQUENCE TYPE
+            # 5. PERFORM FEATURE EXTRACTION
             # =============================================
             csv_data = None
+            output_file_path = os.path.join(temp_output_dir, f"{unique_id}_features.csv")
             
-            if sequence_type == 'Protein':
-                extractor = ProteinFeatureExtractor()
-                csv_data = extractor.to_csv(
-                    file_path,
-                    methods=[descriptor],
-                    params=params_dict,
-                    include_labels=True
-                )
-            elif sequence_type == 'DNA':
-                extractor = DNAFeatureExtractor()
-                csv_data = extractor.to_csv(
-                    file_path,
-                    methods=[descriptor],
-                    params=params_dict,
-                    include_labels=True
-                )
-            elif sequence_type == 'RNA':
-                extractor = RNAFeatureExtractor()
-                csv_data = extractor.to_csv(
-                    file_path,
-                    methods=[descriptor],
-                    params=params_dict,
-                    include_labels=True
-                )
-            else:
-                raise ValueError(f"Unknown sequence type: {sequence_type}")
+            try:
+                if sequence_type == 'Protein':
+                    extractor = ProteinFeatureExtractor()
+                    csv_data = extractor.to_csv(
+                        input_file_path,
+                        methods=[descriptor],
+                        params=params_dict,
+                        include_labels=True
+                    )
+                elif sequence_type == 'DNA':
+                    extractor = DNAFeatureExtractor()
+                    csv_data = extractor.to_csv(
+                        input_file_path,
+                        methods=[descriptor],
+                        params=params_dict,
+                        include_labels=True
+                    )
+                elif sequence_type == 'RNA':
+                    extractor = RNAFeatureExtractor()
+                    csv_data = extractor.to_csv(
+                        input_file_path,
+                        methods=[descriptor],
+                        params=params_dict,
+                        include_labels=True
+                    )
+                else:
+                    raise ValueError(f"Unknown sequence type: {sequence_type}")
+            except Exception as e:
+                return JsonResponse({
+                    'error': 'Feature extraction failed',
+                    'details': str(e)
+                }, status=500)
             
             # =============================================
-            # 5. REMOVE ID COLUMN FROM CSV DATA
+            # 6. PROCESS CSV DATA (REMOVE ID COLUMN)
             # =============================================
             if csv_data:
                 lines = csv_data.split('\n')
@@ -293,35 +343,92 @@ def analyze_sequence(request):
                         
                         # Rebuild CSV without ID column
                         csv_data = '\n'.join(processed_lines)
+                
+                # Save processed CSV to temp location
+                try:
+                    with open(output_file_path, 'w') as f:
+                        f.write(csv_data)
+                except IOError as e:
+                    return JsonResponse({
+                        'error': 'Failed to save results',
+                        'details': str(e)
+                    }, status=500)
             
+
+
             # =============================================
-            # 6. PREPARE RESPONSE AND CLEAN UP
+            # 7. STORE EXTRACTED DATA FOR FUTURE USE
+            # =============================================
+            if csv_data:
+                # Generate unique extraction ID
+                extraction_id = str(uuid.uuid4())
+                
+                # Create temp file path for the extracted features
+                features_file_path = os.path.join(temp_output_dir, f"{extraction_id}_features.csv")
+                
+                # Save the CSV data to file
+                with open(features_file_path, 'w') as f:
+                    f.write(csv_data)
+                
+                # Store metadata in global dictionary
+                EXTRACTED_DATA_STORE[extraction_id] = {
+                    'file_path': features_file_path,
+                    'sequence_type': sequence_type,
+                    'descriptor': descriptor,
+                    'created_at': time.time(),
+                    'target_column': None  # Will be determined during training
+                }
+                
+                # Also store in session for immediate access
+                request.session['extracted_features'] = {
+                    'extraction_id': extraction_id,
+                    'csv_data': csv_data  # Store a copy of the data
+                }
+
+
+            # =============================================
+            # 8. PREPARE RESPONSE
             # =============================================
             response_data = {
                 'message': 'Feature extraction completed',
                 'file_name': fasta_file.name,
                 'sequence_type': sequence_type,
                 'descriptor': descriptor,
-                'csv_data': csv_data  # This now has no ID column
+                'csv_data': csv_data,  # This now has no ID column
+                'temp_file_path': output_file_path  # Store path for potential download
             }
             
-            # Clean up temporary file
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            # =============================================
+            # 9. CLEAN UP INPUT FILE (KEEP OUTPUT FOR NOW)
+            # =============================================
+            try:
+                if input_file_path and os.path.exists(input_file_path):
+                    os.remove(input_file_path)
+            except Exception as e:
+                print(f"Warning: Could not delete input file: {e}")
             
             return JsonResponse(response_data)
             
         except Exception as e:
             # =============================================
-            # ERROR HANDLING
+            # ERROR HANDLING AND CLEANUP
             # =============================================
-            # Clean up temporary file if it exists
-            if 'file_path' in locals() and os.path.exists(file_path):
-                os.remove(file_path)
+            # Clean up any temporary files if they exist
+            try:
+                if input_file_path and os.path.exists(input_file_path):
+                    os.remove(input_file_path)
+            except:
+                pass
+            
+            try:
+                if output_file_path and os.path.exists(output_file_path):
+                    os.remove(output_file_path)
+            except:
+                pass
                 
             return JsonResponse({
-                'error': str(e),
-                'details': 'Failed to process sequence features'
+                'error': 'Processing failed',
+                'details': str(e)
             }, status=400)
     
     # Return error for non-POST requests or missing file
@@ -331,25 +438,56 @@ def analyze_sequence(request):
     }, status=400)
 
 
+def cleanup_temp_files():
+    """
+    Utility function to clean up all temporary files.
+    Can be called periodically or when needed.
+    """
+    temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp')
+    if os.path.exists(temp_dir):
+        for root, dirs, files in os.walk(temp_dir):
+            for file in files:
+                try:
+                    os.remove(os.path.join(root, file))
+                except Exception as e:
+                    print(f"Error deleting temp file {file}: {e}")
+
 def module_selection(request):
     """Render module selection page with available algorithms"""
     return render(request, 'module_selection.html')
+
 
 @csrf_exempt
 def train_model(request):
     """
     Handles model training requests from the frontend.
-    Accepts CSV files and returns training results in JSON format.
+    Supports three data sources:
+    1. Uploaded dataset file with train/test split
+    2. Separate training and testing files
+    3. Extracted feature data from analyze_sequence()
+    
+    Args:
+        request: Django HTTP request containing:
+            - Data source specification (file_option)
+            - Multiple algorithm selections with parameters
+            - For extracted data: extraction_id
+    
+    Returns:
+        JsonResponse with training results or error message
     """
     if request.method == 'POST':
         try:
-            # ========== FILE UPLOAD VALIDATION ==========
+            # ========== REQUEST VALIDATION ==========
             file_option = request.POST.get('file_option')
-            if file_option == 'single' and 'dataset_file' not in request.FILES:
-                return JsonResponse({'error': 'No dataset file provided'}, status=400)
-            elif file_option == 'separate' and ('training_file' not in request.FILES or 'testing_file' not in request.FILES):
-                return JsonResponse({'error': 'Both training and testing files are required'}, status=400)
+            extracted_data = request.POST.get('extracted_data')
             
+            # Validate data source
+            if not extracted_data:
+                if file_option == 'single' and 'dataset_file' not in request.FILES:
+                    return JsonResponse({'error': 'No dataset file provided'}, status=400)
+                elif file_option == 'separate' and ('training_file' not in request.FILES or 'testing_file' not in request.FILES):
+                    return JsonResponse({'error': 'Both training and testing files are required'}, status=400)
+                
             # ========== PARAMETER VALIDATION ==========
             try:
                 train_percent = int(request.POST.get('train_percent', 80))
@@ -358,18 +496,69 @@ def train_model(request):
             except (ValueError, TypeError):
                 return JsonResponse({'error': 'Invalid train percentage (must be integer between 1-99)'}, status=400)
             
-            algorithm = request.POST.get('algorithm')
-            target_column = request.POST.get('target_column', 'label')
-            
-            # Parse algorithm parameters
+            # Parse selected algorithms and their parameters
             try:
-                parameters = json.loads(request.POST.get('parameters', '{}'))
+                selected_algorithms = json.loads(request.POST.get('algorithms', '[]'))
+                if not selected_algorithms:
+                    return JsonResponse({'error': 'No algorithms selected'}, status=400)
             except json.JSONDecodeError:
-                parameters = {}
+                return JsonResponse({'error': 'Invalid algorithm parameters'}, status=400)
+                
+            target_column = request.POST.get('target_column', 'label')
             
             # ========== DATA PROCESSING ==========
             try:
-                if file_option == 'single':
+                
+                if extracted_data:
+                    # Get extraction_id from session
+                    extraction_id = request.session.get('extracted_features', {}).get('extraction_id')
+                   
+                    if not extraction_id:
+                        return JsonResponse({'error': 'No extraction ID found in session'}, status=400)
+
+                    # Construct the file path from extraction ID
+                    temp_output_dir = os.path.join(settings.MEDIA_ROOT, 'temp', 'output')
+                    features_file_path = os.path.join(temp_output_dir, f"{extraction_id}_features.csv")
+
+                    # Check if file exists
+                    if not os.path.exists(features_file_path):
+                        return JsonResponse({'error': f'No features file found with ID {extraction_id}'}, status=400)
+                    
+                    # Read CSV into DataFrame
+                    df = pd.read_csv(features_file_path)
+                    if len(df.columns) < 2:
+                        return JsonResponse({'error': 'Dataset must have at least 2 columns (features + target)'}, status=400)
+                    
+                    # Handle target column selection
+                    try:
+                        target_col_idx = int(target_column)
+                        if target_col_idx == -1:
+                            target_col_idx = len(df.columns) - 1
+                        if target_col_idx >= len(df.columns) or target_col_idx < 0:
+                            return JsonResponse({'error': f'Target column index {target_col_idx} is out of range (0-{len(df.columns)-1})'}, status=400)
+                        target_column_name = df.columns[target_col_idx]
+                    except ValueError:
+                        if target_column not in df.columns:
+                            return JsonResponse({'error': f'Target column "{target_column}" not found in dataset. Available columns: {list(df.columns)}'}, status=400)
+                        target_column_name = target_column
+                    
+                    X = df.drop(target_column_name, axis=1)
+                    y = df[target_column_name]
+                    
+                    # Encode categorical target if needed
+                    if y.dtype == 'object':
+                        le = LabelEncoder()
+                        y = le.fit_transform(y)
+                    
+                    # Split data into train and test sets
+                    X_train, X_test, y_train, y_test = train_test_split(
+                        X, y, 
+                        train_size=train_percent/100, 
+                        random_state=42, 
+                        stratify=y if len(np.unique(y)) > 1 else None
+                    )
+                    
+                elif file_option == 'single':
                     # Process single file with train/test split
                     df = pd.read_csv(request.FILES['dataset_file'])
                     if len(df.columns) < 2:
@@ -398,7 +587,10 @@ def train_model(request):
                     
                     # Split data into train and test sets
                     X_train, X_test, y_train, y_test = train_test_split(
-                        X, y, train_size=train_percent/100, random_state=42, stratify=y
+                        X, y, 
+                        train_size=train_percent/100, 
+                        random_state=42, 
+                        stratify=y if len(np.unique(y)) > 1 else None
                     )
                 else:  # separate files
                     # Process separate training and testing files
@@ -443,176 +635,202 @@ def train_model(request):
                 problem_type = 'regression'
                 binary_classification = False
             
-            # ========== ALGORITHM VALIDATION ==========
-            regression_algorithms = ['linear_regression', 'random_forest_regressor', 'svm_regressor']
-            classification_algorithms = ['logistic_regression', 'random_forest', 'decision_tree', 'svm', 'knn', 'neural_network']
+            # ========== TRAIN ALL SELECTED ALGORITHMS ==========
+            results = []
             
-            if problem_type == 'regression' and algorithm not in regression_algorithms:
-                return JsonResponse({'error': f'Selected algorithm is not suitable for regression problems. Please use: {", ".join(regression_algorithms)}'}, status=400)
-            elif problem_type == 'classification' and algorithm not in classification_algorithms:
-                return JsonResponse({'error': f'Selected algorithm is not suitable for classification problems. Please use: {", ".join(classification_algorithms)}'}, status=400)
-            
-            # ========== MODEL TRAINING ==========
-            try:
-                model = None
-                # Initialize appropriate model based on selected algorithm with parameters
-                if algorithm == 'linear_regression':
-                    from sklearn.linear_model import LinearRegression
-                    model = LinearRegression(
-                        fit_intercept=parameters.get('fit_intercept', True),
-                        normalize=parameters.get('normalize', False)
-                    )
-                elif algorithm == 'logistic_regression':
-                    from sklearn.linear_model import LogisticRegression
-                    model = LogisticRegression(
-                        C=parameters.get('C', 1.0),
-                        max_iter=parameters.get('max_iter', 100),
-                        random_state=42
-                    )
-                elif algorithm == 'random_forest':
-                    from sklearn.ensemble import RandomForestClassifier
-                    model = RandomForestClassifier(
-                        n_estimators=parameters.get('n_estimators', 100),
-                        max_depth=parameters.get('max_depth', None),
-                        min_samples_split=parameters.get('min_samples_split', 2),
-                        random_state=42
-                    )
-                elif algorithm == 'random_forest_regressor':
-                    from sklearn.ensemble import RandomForestRegressor
-                    model = RandomForestRegressor(
-                        n_estimators=parameters.get('n_estimators', 100),
-                        max_depth=parameters.get('max_depth', None),
-                        min_samples_split=parameters.get('min_samples_split', 2),
-                        random_state=42
-                    )
-                elif algorithm == 'decision_tree':
-                    from sklearn.tree import DecisionTreeClassifier
-                    model = DecisionTreeClassifier(
-                        max_depth=parameters.get('max_depth', None),
-                        min_samples_split=parameters.get('min_samples_split', 2),
-                        random_state=42
-                    )
-                elif algorithm == 'svm':
-                    from sklearn.svm import SVC
-                    model = SVC(
-                        C=parameters.get('C', 1.0),
-                        kernel=parameters.get('kernel', 'rbf'),
-                        probability=True,
-                        random_state=42
-                    )
-                elif algorithm == 'svm_regressor':
-                    from sklearn.svm import SVR
-                    model = SVR(
-                        C=parameters.get('C', 1.0),
-                        kernel=parameters.get('kernel', 'rbf')
-                    )
-                elif algorithm == 'knn':
-                    from sklearn.neighbors import KNeighborsClassifier
-                    model = KNeighborsClassifier(
-                        n_neighbors=parameters.get('n_neighbors', 5),
-                        weights=parameters.get('weights', 'uniform')
-                    )
-                elif algorithm == 'neural_network':
-                    from sklearn.neural_network import MLPClassifier
-                    # Parse hidden layer sizes from string (e.g. "100,50" -> (100, 50))
-                    hidden_layer_sizes = tuple(
-                        int(x) for x in parameters.get('hidden_layer_sizes', '100').split(',')
-                    ) if parameters.get('hidden_layer_sizes') else (100,)
-                    model = MLPClassifier(
-                        hidden_layer_sizes=hidden_layer_sizes,
-                        activation=parameters.get('activation', 'relu'),
-                        learning_rate=parameters.get('learning_rate', 'constant'),
-                        max_iter=1000,
-                        random_state=42
-                    )
-                else:
-                    return JsonResponse({'error': 'Invalid algorithm selected'})
+            for algo_config in selected_algorithms:
+                algorithm = algo_config['algorithm']
+                parameters = algo_config.get('parameters', {})
                 
-                # Train the model
-                model.fit(X_train, y_train)
-                y_pred = model.predict(X_test)
-                
-                # For classification, get probability scores if available
-                y_scores = None
-                if problem_type == 'classification':
-                    try:
-                        if hasattr(model, 'predict_proba'):
-                            y_scores = model.predict_proba(X_test)[:, 1]
-                        elif hasattr(model, 'decision_function'):
-                            y_scores = model.decision_function(X_test)
-                    except:
-                        pass
-            except Exception as e:
-                return JsonResponse({'error': f'Error training model: {str(e)}'}, status=400)
-            
-            # ========== METRICS CALCULATION ==========
-            results = {
-                'problem_type': problem_type,
-                'algorithm': algorithm.replace('_', ' ').title(),
-                'target_column': target_column_name,
-                'parameters': parameters  # Include the parameters used in the response
-            }
-            
-            if problem_type == 'classification':
-                # Calculate classification metrics
-                cm = confusion_matrix(y_test, y_pred)
-                accuracy = accuracy_score(y_test, y_pred)
-                precision_score_val = precision_score(y_test, y_pred, average='weighted')
-                recall_score_val = recall_score(y_test, y_pred, average='weighted')
-                f1 = f1_score(y_test, y_pred, average='weighted')
-                
-                results.update({
-                    'accuracy': accuracy,
-                    'precision': precision_score_val,
-                    'recall': recall_score_val,
-                    'f1_score': f1,
-                    'confusion_matrix': cm.tolist(),
-                    'classes': unique_classes.tolist(),
-                    'binary_classification': binary_classification,
-                })
-                
-                # ROC and PRC for binary classification
-                if binary_classification and y_scores is not None:
-                    try:
-                        # Calculate ROC curve
-                        fpr, tpr, _ = roc_curve(y_test, y_scores)
-                        roc_auc = auc(fpr, tpr)
-                        
-                        # Calculate Precision-Recall curve
-                        precision, recall, _ = precision_recall_curve(y_test, y_scores)
-                        pr_auc = average_precision_score(y_test, y_scores)
-                        
-                        results.update({
-                            'roc_curve': {
-                                'fpr': fpr.tolist(),
-                                'tpr': tpr.tolist(),
-                                'auc': roc_auc
-                            },
-                            'pr_curve': {
-                                'recall': recall.tolist(),
-                                'precision': precision.tolist(),
-                                'auprc': pr_auc
-                            }
+                try:
+                    # Validate algorithm against problem type
+                    regression_algorithms = ['linear_regression', 'random_forest_regressor', 'svm_regressor']
+                    classification_algorithms = ['logistic_regression', 'random_forest', 'decision_tree', 'svm', 'knn', 'neural_network']
+                    
+                    if problem_type == 'regression' and algorithm not in regression_algorithms:
+                        results.append({
+                            'algorithm': algorithm,
+                            'error': f'Algorithm not suitable for regression problems'
                         })
-                    except Exception as e:
-                        print(f"Error generating curves: {str(e)}")
+                        continue
+                    elif problem_type == 'classification' and algorithm not in classification_algorithms:
+                        results.append({
+                            'algorithm': algorithm,
+                            'error': f'Algorithm not suitable for classification problems'
+                        })
+                        continue
+                    
+                    # Initialize appropriate model based on selected algorithm with parameters
+                    model = None
+                    if algorithm == 'linear_regression':
+                        from sklearn.linear_model import LinearRegression
+                        model = LinearRegression(
+                            fit_intercept=parameters.get('fit_intercept', True),
+                            normalize=parameters.get('normalize', False)
+                        )
+                    elif algorithm == 'logistic_regression':
+                        from sklearn.linear_model import LogisticRegression
+                        model = LogisticRegression(
+                            C=parameters.get('C', 1.0),
+                            max_iter=parameters.get('max_iter', 100),
+                            random_state=42
+                        )
+                    elif algorithm == 'random_forest':
+                        from sklearn.ensemble import RandomForestClassifier
+                        model = RandomForestClassifier(
+                            n_estimators=parameters.get('n_estimators', 100),
+                            max_depth=parameters.get('max_depth', None),
+                            min_samples_split=parameters.get('min_samples_split', 2),
+                            random_state=42
+                        )
+                    elif algorithm == 'random_forest_regressor':
+                        from sklearn.ensemble import RandomForestRegressor
+                        model = RandomForestRegressor(
+                            n_estimators=parameters.get('n_estimators', 100),
+                            max_depth=parameters.get('max_depth', None),
+                            min_samples_split=parameters.get('min_samples_split', 2),
+                            random_state=42
+                        )
+                    elif algorithm == 'decision_tree':
+                        from sklearn.tree import DecisionTreeClassifier
+                        model = DecisionTreeClassifier(
+                            max_depth=parameters.get('max_depth', None),
+                            min_samples_split=parameters.get('min_samples_split', 2),
+                            random_state=42
+                        )
+                    elif algorithm == 'svm':
+                        from sklearn.svm import SVC
+                        model = SVC(
+                            C=parameters.get('C', 1.0),
+                            kernel=parameters.get('kernel', 'rbf'),
+                            probability=True,
+                            random_state=42
+                        )
+                    elif algorithm == 'svm_regressor':
+                        from sklearn.svm import SVR
+                        model = SVR(
+                            C=parameters.get('C', 1.0),
+                            kernel=parameters.get('kernel', 'rbf')
+                        )
+                    elif algorithm == 'knn':
+                        from sklearn.neighbors import KNeighborsClassifier
+                        model = KNeighborsClassifier(
+                            n_neighbors=parameters.get('n_neighbors', 5),
+                            weights=parameters.get('weights', 'uniform')
+                        )
+                    elif algorithm == 'neural_network':
+                        from sklearn.neural_network import MLPClassifier
+                        # Parse hidden layer sizes from string (e.g. "100,50" -> (100, 50))
+                        hidden_layer_sizes = tuple(
+                            int(x) for x in parameters.get('hidden_layer_sizes', '100').split(',')
+                        ) if parameters.get('hidden_layer_sizes') else (100,)
+                        model = MLPClassifier(
+                            hidden_layer_sizes=hidden_layer_sizes,
+                            activation=parameters.get('activation', 'relu'),
+                            learning_rate=parameters.get('learning_rate', 'constant'),
+                            max_iter=1000,
+                            random_state=42
+                        )
+                    else:
+                        results.append({
+                            'algorithm': algorithm,
+                            'error': 'Invalid algorithm selected'
+                        })
+                        continue
+                    
+                    # Train the model
+                    model.fit(X_train, y_train)
+                    y_pred = model.predict(X_test)
+                    
+                    # For classification, get probability scores if available
+                    y_scores = None
+                    if problem_type == 'classification':
+                        try:
+                            if hasattr(model, 'predict_proba'):
+                                y_scores = model.predict_proba(X_test)[:, 1]
+                            elif hasattr(model, 'decision_function'):
+                                y_scores = model.decision_function(X_test)
+                        except:
+                            pass
+                    
+                    # Prepare result object
+                    algo_result = {
+                        'algorithm': algorithm.replace('_', ' ').title(),
+                        'parameters': parameters
+                    }
+                    
+                    if problem_type == 'classification':
+                        # Calculate classification metrics
+                        cm = confusion_matrix(y_test, y_pred)
+                        accuracy = accuracy_score(y_test, y_pred)
+                        precision_score_val = precision_score(y_test, y_pred, average='weighted')
+                        recall_score_val = recall_score(y_test, y_pred, average='weighted')
+                        f1 = f1_score(y_test, y_pred, average='weighted')
                         
-            else:  # regression
-                # Calculate regression metrics
-                mse = mean_squared_error(y_test, y_pred)
-                mae = mean_absolute_error(y_test, y_pred)
-                r2 = r2_score(y_test, y_pred)
-                
-                results.update({
-                    'mse': mse,
-                    'mae': mae,
-                    'r2_score': r2,
-                })
+                        algo_result.update({
+                            'accuracy': accuracy,
+                            'precision': precision_score_val,
+                            'recall': recall_score_val,
+                            'f1_score': f1,
+                            'confusion_matrix': cm.tolist(),
+                            'classes': unique_classes.tolist(),
+                        })
+                        
+                        # ROC and PRC for binary classification
+                        if binary_classification and y_scores is not None:
+                            try:
+                                # Calculate ROC curve
+                                fpr, tpr, _ = roc_curve(y_test, y_scores)
+                                roc_auc = auc(fpr, tpr)
+                                
+                                # Calculate Precision-Recall curve
+                                precision, recall, _ = precision_recall_curve(y_test, y_scores)
+                                pr_auc = average_precision_score(y_test, y_scores)
+                                
+                                algo_result.update({
+                                    'roc_curve': {
+                                        'fpr': fpr.tolist(),
+                                        'tpr': tpr.tolist(),
+                                        'auc': roc_auc
+                                    },
+                                    'pr_curve': {
+                                        'recall': recall.tolist(),
+                                        'precision': precision.tolist(),
+                                        'auprc': pr_auc
+                                    }
+                                })
+                            except Exception as e:
+                                print(f"Error generating curves for {algorithm}: {str(e)}")
+                                
+                    else:  # regression
+                        # Calculate regression metrics
+                        mse = mean_squared_error(y_test, y_pred)
+                        mae = mean_absolute_error(y_test, y_pred)
+                        r2 = r2_score(y_test, y_pred)
+                        
+                        algo_result.update({
+                            'mse': mse,
+                            'mae': mae,
+                            'r2_score': r2,
+                        })
+                    
+                    results.append(algo_result)
+                    
+                except Exception as e:
+                    results.append({
+                        'algorithm': algorithm,
+                        'error': f'Training failed: {str(e)}'
+                    })
+                    continue
             
             # ========== RETURN RESULTS ==========
             return JsonResponse({
                 'status': 'success',
-                **results
+                'problem_type': problem_type,
+                'target_column': target_column_name,
+                'binary_classification': binary_classification,
+                'results': results,
+                'data_source': 'extracted' if extracted_data else 'uploaded'
             })
             
         except Exception as e:
@@ -620,17 +838,45 @@ def train_model(request):
     
     return JsonResponse({'error': 'Only POST requests are allowed'}, status=405)
 
-
 def module_selection_with_features(request):
-    # Get the CSV data from session (passed from JavaScript)
-    csv_data = request.session.get('extracted_features', '')
+    """
+    Render module selection page with option to train on extracted features.
+    """
+    extraction_id = request.GET.get('extraction_id')
+    extracted_data = None
     
-    context = {
-        'preloaded_features': True,
-        'features_data': csv_data,
-    }
+    if extraction_id and extraction_id in EXTRACTED_DATA_STORE:
+        data_info = EXTRACTED_DATA_STORE[extraction_id]
+        try:
+            # Read the extracted features file
+            with open(data_info['file_path'], 'r') as f:
+                extracted_data = f.read()
+            
+            # Get target column (assuming last column is target)
+            df = pd.read_csv(StringIO(extracted_data))
+            target_column = df.columns[-1]
+            
+            context = {
+                'preloaded_features': True,
+                'extraction_id': extraction_id,
+                'target_column': target_column,
+                'sequence_type': data_info['sequence_type'],
+                'descriptor': data_info['descriptor'],
+                'features_preview': extracted_data.split('\n')[:10]  # First 10 lines for preview
+            }
+            return render(request, 'module_selection_with_features.html', context)
+            
+        except Exception as e:
+            # Clean up if file is corrupted
+            if os.path.exists(data_info['file_path']):
+                os.remove(data_info['file_path'])
+            del EXTRACTED_DATA_STORE[extraction_id]
     
-    return render(request, 'module_selection_with_features.html', context)
+    # Default case (no valid extracted data)
+    return render(request, 'module_selection_with_features.html', {
+        'preloaded_features': False,
+        'error': 'No valid extracted features found'
+    })
 
 def train_model_with_features(request):
     if request.method == 'POST':
