@@ -190,8 +190,8 @@ def feature_extraction(request):
 
 def analyze_sequence(request):
     """
-    Handle sequence feature extraction request and return CSV data without ID column.
-    Updated to handle temporary file storage and cleanup with proper file handling.
+    Handle sequence feature extraction request and manage extracted CSV data storage.
+    Automatically replaces old extracted data with new data in 'extracted_CSV.csv'.
     
     Args:
         request: Django HTTP request object containing:
@@ -204,10 +204,12 @@ def analyze_sequence(request):
             - Processed CSV data without ID column
             - Metadata about the analysis
     """
+    # Define the path for storing the extracted CSV
+    EXTRACTED_CSV_PATH = os.path.join(settings.MEDIA_ROOT, 'extracted_CSV.csv')
+    
     if request.method == 'POST' and request.FILES.get('fasta_file'):
         # Initialize file paths for cleanup
         input_file_path = None
-        output_file_path = None
         
         try:
             # =============================================
@@ -221,33 +223,23 @@ def analyze_sequence(request):
             # =============================================
             # 2. SETUP TEMPORARY STORAGE LOCATION
             # =============================================
-            # Create temp directories if they don't exist
+            # Create temp directory if it doesn't exist
             temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp')
-            temp_input_dir = os.path.join(temp_dir, 'input')
-            temp_output_dir = os.path.join(temp_dir, 'output')
-            
-            os.makedirs(temp_input_dir, exist_ok=True)
-            os.makedirs(temp_output_dir, exist_ok=True)
+            os.makedirs(temp_dir, exist_ok=True)
             
             # Clean up any previous temporary files
-            for f in os.listdir(temp_input_dir):
+            for f in os.listdir(temp_dir):
                 try:
-                    os.remove(os.path.join(temp_input_dir, f))
-                except PermissionError:
+                    os.remove(os.path.join(temp_dir, f))
+                except (PermissionError, IsADirectoryError):
                     continue  # Skip files that can't be deleted
-            for f in os.listdir(temp_output_dir):
-                try:
-                    os.remove(os.path.join(temp_output_dir, f))
-                except PermissionError:
-                    continue
             
             # =============================================
             # 3. SAVE UPLOADED FILE TO TEMP LOCATION
             # =============================================
             # Generate unique filename to prevent collisions
-            import uuid
             unique_id = uuid.uuid4().hex
-            input_file_path = os.path.join(temp_input_dir, f"{unique_id}_{fasta_file.name}")
+            input_file_path = os.path.join(temp_dir, f"{unique_id}_{fasta_file.name}")
             
             # Safely save the uploaded file with error handling
             try:
@@ -283,7 +275,6 @@ def analyze_sequence(request):
             # 5. PERFORM FEATURE EXTRACTION
             # =============================================
             csv_data = None
-            output_file_path = os.path.join(temp_output_dir, f"{unique_id}_features.csv")
             
             try:
                 if sequence_type == 'Protein':
@@ -343,49 +334,28 @@ def analyze_sequence(request):
                         
                         # Rebuild CSV without ID column
                         csv_data = '\n'.join(processed_lines)
-                
-                # Save processed CSV to temp location
+            
+            # =============================================
+            # 7. STORE EXTRACTED DATA IN extracted_CSV.csv
+            # =============================================
+            if csv_data:
+                # Remove old extracted CSV file if it exists
                 try:
-                    with open(output_file_path, 'w') as f:
+                    if os.path.exists(EXTRACTED_CSV_PATH):
+                        os.remove(EXTRACTED_CSV_PATH)
+                except Exception as e:
+                    print(f"Warning: Could not delete old extracted CSV: {e}")
+                
+                # Save new extracted data to extracted_CSV.csv
+                try:
+                    with open(EXTRACTED_CSV_PATH, 'w') as f:
                         f.write(csv_data)
                 except IOError as e:
                     return JsonResponse({
-                        'error': 'Failed to save results',
+                        'error': 'Failed to save extracted features',
                         'details': str(e)
                     }, status=500)
             
-
-
-            # =============================================
-            # 7. STORE EXTRACTED DATA FOR FUTURE USE
-            # =============================================
-            if csv_data:
-                # Generate unique extraction ID
-                extraction_id = str(uuid.uuid4())
-                
-                # Create temp file path for the extracted features
-                features_file_path = os.path.join(temp_output_dir, f"{extraction_id}_features.csv")
-                
-                # Save the CSV data to file
-                with open(features_file_path, 'w') as f:
-                    f.write(csv_data)
-                
-                # Store metadata in global dictionary
-                EXTRACTED_DATA_STORE[extraction_id] = {
-                    'file_path': features_file_path,
-                    'sequence_type': sequence_type,
-                    'descriptor': descriptor,
-                    'created_at': time.time(),
-                    'target_column': None  # Will be determined during training
-                }
-                
-                # Also store in session for immediate access
-                request.session['extracted_features'] = {
-                    'extraction_id': extraction_id,
-                    'csv_data': csv_data  # Store a copy of the data
-                }
-
-
             # =============================================
             # 8. PREPARE RESPONSE
             # =============================================
@@ -395,17 +365,8 @@ def analyze_sequence(request):
                 'sequence_type': sequence_type,
                 'descriptor': descriptor,
                 'csv_data': csv_data,  # This now has no ID column
-                'temp_file_path': output_file_path  # Store path for potential download
+                'extracted_csv_path': EXTRACTED_CSV_PATH  # Path to stored CSV
             }
-            
-            # =============================================
-            # 9. CLEAN UP INPUT FILE (KEEP OUTPUT FOR NOW)
-            # =============================================
-            try:
-                if input_file_path and os.path.exists(input_file_path):
-                    os.remove(input_file_path)
-            except Exception as e:
-                print(f"Warning: Could not delete input file: {e}")
             
             return JsonResponse(response_data)
             
@@ -419,12 +380,6 @@ def analyze_sequence(request):
                     os.remove(input_file_path)
             except:
                 pass
-            
-            try:
-                if output_file_path and os.path.exists(output_file_path):
-                    os.remove(output_file_path)
-            except:
-                pass
                 
             return JsonResponse({
                 'error': 'Processing failed',
@@ -436,7 +391,6 @@ def analyze_sequence(request):
         'error': 'Invalid request',
         'details': 'Only POST requests with file upload are accepted'
     }, status=400)
-
 
 def cleanup_temp_files():
     """
@@ -510,22 +464,33 @@ def train_model(request):
             try:
                 
                 if extracted_data:
-                    # Get extraction_id from session
-                    extraction_id = request.session.get('extracted_features', {}).get('extraction_id')
+
+                    EXTRACTED_CSV_PATH = os.path.join(settings.MEDIA_ROOT, 'extracted_CSV.csv')
+    
+                    if not os.path.exists(EXTRACTED_CSV_PATH):
+                        return JsonResponse({
+                            'success': False,
+                            'error': 'No extracted data available',
+                            'details': 'Please perform feature extraction first'
+                        }, status=404)
+                
+
+                    # # Get extraction_id from session
+                    # extraction_id = request.session.get('extracted_features', {}).get('extraction_id')
                    
-                    if not extraction_id:
-                        return JsonResponse({'error': 'No extraction ID found in session'}, status=400)
+                    # if not extraction_id:
+                    #     return JsonResponse({'error': 'No extraction ID found in session'}, status=400)
 
-                    # Construct the file path from extraction ID
-                    temp_output_dir = os.path.join(settings.MEDIA_ROOT, 'temp', 'output')
-                    features_file_path = os.path.join(temp_output_dir, f"{extraction_id}_features.csv")
+                    # # Construct the file path from extraction ID
+                    # temp_output_dir = os.path.join(settings.MEDIA_ROOT, 'temp', 'output')
+                    # features_file_path = os.path.join(temp_output_dir, f"{extraction_id}_features.csv")
 
-                    # Check if file exists
-                    if not os.path.exists(features_file_path):
-                        return JsonResponse({'error': f'No features file found with ID {extraction_id}'}, status=400)
+                    # # Check if file exists
+                    # if not os.path.exists(features_file_path):
+                    #     return JsonResponse({'error': f'No features file found with ID {extraction_id}'}, status=400)
                     
                     # Read CSV into DataFrame
-                    df = pd.read_csv(features_file_path)
+                    df = pd.read_csv(EXTRACTED_CSV_PATH)
                     if len(df.columns) < 2:
                         return JsonResponse({'error': 'Dataset must have at least 2 columns (features + target)'}, status=400)
                     
