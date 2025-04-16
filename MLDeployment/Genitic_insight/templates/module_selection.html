@@ -19,6 +19,95 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
     <style>
+
+    /* Footer Styles */
+    footer {
+        background: linear-gradient(135deg, #1a3a8f 0%, #0d6efd 100%);
+        color: #fff;
+        padding: 2.5rem 0;
+        margin-top: 5rem;
+        box-shadow: 0 -5px 15px rgba(0, 0, 0, 0.1);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    footer::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: url('{% static "images/dna-pattern.png" %}') repeat;
+        opacity: 0.05;
+        pointer-events: none;
+    }
+    
+    footer .container {
+        position: relative;
+        z-index: 1;
+    }
+    
+    footer p {
+        font-size: 1.1rem;
+        font-weight: 300;
+        letter-spacing: 0.5px;
+        margin-bottom: 1.5rem !important;
+    }
+    
+    footer .social-links {
+        display: flex;
+        justify-content: center;
+        gap: 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+    
+    footer .social-links a {
+        color: #fff;
+        font-size: 1.5rem;
+        transition: all 0.3s ease;
+    }
+    
+    footer .social-links a:hover {
+        color: #aad1ff;
+        transform: translateY(-3px);
+    }
+    
+    footer .footer-links {
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+    
+    footer .footer-links a {
+        color: #fff;
+        text-decoration: none;
+        font-weight: 400;
+        transition: all 0.3s ease;
+    }
+
+        footer .footer-links a:hover {
+            color: #aad1ff;
+            text-decoration: underline;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            footer {
+                padding: 2rem 0;
+            }
+
+            footer p {
+                font-size: 1rem;
+            }
+
+            footer .social-links,
+            footer .footer-links {
+                gap: 1rem;
+            }
+        }
         /* Main styling for the application */
         body {
             font-family: Arial, sans-serif;
@@ -306,6 +395,20 @@
             font-weight: bold;
             color: #198754;
         }
+
+        /* Report section styling - initially hidden */
+        .report-section {
+            margin-top: 30px;
+            display: none;
+        }
+
+        .form-check {
+            margin-bottom: 5px;
+        }
+
+        .form-check-input {
+            margin-right: 8px;
+        }
     </style>
 </head>
 <body>
@@ -486,7 +589,7 @@
             </div>
         </div>
 
-        <!-- Results Section -->
+        <!-- Results Section - Initially hidden -->
         <div id="results">
             <div class="header">
                 <h5 class="m-0">Training Results</h5>
@@ -494,6 +597,59 @@
             <div class="content">
                 <div class="card">
                     <div class="card-body" id="resultContent"></div>
+                </div>
+            </div>
+            
+            <!-- Download Analysis Report Section - Initially hidden -->
+            <div class="report-section" id="reportSection">
+                <div class="card mt-4">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">Download Analysis Report</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Report Format</label>
+                                    <select class="form-select" id="reportFormat">
+                                        <option value="pdf">PDF</option>
+                                        <option value="html">HTML</option>
+                                        <option value="csv">CSV (Metrics Only)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Report Name</label>
+                                    <input type="text" class="form-control" id="reportName" value="Model_Analysis_Report">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Include in Report</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="includeMetrics" checked>
+                                <label class="form-check-label" for="includeMetrics">Model Metrics</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="includeCharts" checked>
+                                <label class="form-check-label" for="includeCharts">Visualizations</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="includeParameters" checked>
+                                <label class="form-check-label" for="includeParameters">Algorithm Parameters</label>
+                            </div>
+                        </div>
+                        <button type="button" class="btn btn-primary" id="generateReportBtn">
+                            <i class="bi bi-download me-1"></i> Generate & Download Report
+                        </button>
+                        <div id="reportLoadingIndicator" class="mt-3" style="display: none;">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Generating report...</span>
+                            </div>
+                            <p>Generating report...</p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1437,6 +1593,9 @@
                 window.parametersModal.hide();
             });
 
+            // Generate report button handler
+            document.getElementById('generateReportBtn').addEventListener('click', generateAnalysisReport);
+
             // Automatically populate extracted data fields (simulating data from another process)
             simulateExtractedDataPopulation();
         });
@@ -1635,6 +1794,7 @@
             document.getElementById('loadingIndicator').style.display = 'block';
             document.getElementById('trainButton').disabled = true;
             document.getElementById('results').style.display = 'none';
+            document.getElementById('reportSection').style.display = 'none';
             document.getElementById('resultContent').innerHTML = '';
     
             // Get CSRF token for Django
@@ -1681,6 +1841,10 @@
                 
                 // Display results
                 displayResults(data);
+                
+                // Show the results and report sections
+                document.getElementById('results').style.display = 'block';
+                document.getElementById('reportSection').style.display = 'block';
             })
             .catch(error => {
                 console.error('Error:', error);
@@ -1818,9 +1982,99 @@
                     }
                 });
             }
-            
-            // Show results section
-            document.getElementById('results').style.display = 'block';
+        }
+
+        /**
+         * Generates and downloads an analysis report
+         */
+        function generateAnalysisReport() {
+            if (!window.modelData) {
+                showErrorModal('No model data available to generate report', 'No Data');
+                return;
+            }
+
+            const reportFormat = document.getElementById('reportFormat').value;
+            const reportName = document.getElementById('reportName').value || 'Model_Analysis_Report';
+            const includeMetrics = document.getElementById('includeMetrics').checked;
+            const includeCharts = document.getElementById('includeCharts').checked;
+            const includeParameters = document.getElementById('includeParameters').checked;
+
+            // Validate at least one section is selected
+            if (!includeMetrics && !includeCharts && !includeParameters) {
+                showErrorModal('Please select at least one section to include in the report', 'No Sections Selected');
+                return;
+            }
+
+            // Show loading indicator
+            document.getElementById('reportLoadingIndicator').style.display = 'block';
+            document.getElementById('generateReportBtn').disabled = true;
+
+            // Prepare report data
+            const reportData = {
+                model_data: window.modelData,
+                format: reportFormat,
+                report_name: reportName,
+                options: {
+                    include_metrics: includeMetrics,
+                    include_charts: includeCharts,
+                    include_parameters: includeParameters
+                }
+            };
+
+            // Get CSRF token
+            function getCookie(name) {
+                let cookieValue = null;
+                if (document.cookie && document.cookie !== '') {
+                    const cookies = document.cookie.split(';');
+                    for (let i = 0; i < cookies.length; i++) {
+                        const cookie = cookies[i].trim();
+                        if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                            cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                            break;
+                        }
+                    }
+                }
+                return cookieValue;
+            }
+
+            const csrftoken = getCookie('csrftoken');
+
+            // Make API request to generate report
+            fetch("{% url 'generate_model_report' %}", {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrftoken
+                },
+                body: JSON.stringify(reportData)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(err => { 
+                        throw new Error(err.error || 'Network response was not ok') 
+                    });
+                }
+                return response.blob();
+            })
+            .then(blob => {
+                // Create download link
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${reportName}.${reportFormat}`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                a.remove();
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showErrorModal('Report generation failed: ' + error.message, 'Report Error');
+            })
+            .finally(() => {
+                document.getElementById('reportLoadingIndicator').style.display = 'none';
+                document.getElementById('generateReportBtn').disabled = false;
+            });
         }
     </script>
 </body>

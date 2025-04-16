@@ -1,0 +1,101 @@
+{% load static %}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>About | Genetic-Insight</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    
+    <!-- Main.CSS -->
+    <link rel="stylesheet" href="{% static 'css/main.css' %}">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        
+        body {
+            font-family: Arial, sans-serif;
+            background: #f5f8fa;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+        header {
+            background-color: #4a90e2;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        main {
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 20px;
+            background: white;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            border-radius: 8px;
+        }
+        h1, h2 {
+            color: #4a90e2;
+        }
+
+    </style>
+</head>
+<body>
+    
+<!-- Include Navbar -->
+{% include 'partials/navbar.html' %}
+
+<header>
+    <h1>About Genetic-Insight</h1>
+</header>
+
+<main>
+    <section>
+        <h2>Project Overview</h2>
+        <p><strong>Genetic-Insight</strong> is a web-based SaaS platform designed to empower researchers and scientists to classify proteins and genes through powerful machine learning techniques. It provides an end-to-end pipeline for feature extraction, model training, evaluation, and results visualization—all without requiring any programming knowledge.</p>
+    </section>
+
+    <section>
+        <h2>Key Features</h2>
+        <ul>
+            <li>Upload and manage biological datasets (FASTA format)</li>
+            <li>Extract features from Protein, DNA, or RNA sequences</li>
+            <li>Choose feature descriptors such as AAC, K-mer, CKSAAP, and more</li>
+            <li>Train machine learning models using SVM, Random Forest, KNN, and others</li>
+            <li>Evaluate model performance with metrics like Confusion Matrix and ROC curves</li>
+            <li>Download detailed analysis reports (PDF/CSV)</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>Target Users</h2>
+        <p>Genetic-Insight is built for bioinformatics researchers, data scientists, and academic institutions looking for a streamlined, user-friendly way to explore and classify genetic data.</p>
+    </section>
+
+    <section>
+        <h2>Technologies Used</h2>
+        <ul>
+            <li>Frontend: HTML, CSS, JavaScript</li>
+            <li>Backend: Python (Django framework)</li>
+            <li>Machine Learning: scikit-learn, NumPy, Pandas</li>
+            <li>Data Visualization: Matplotlib, Seaborn</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>Project Status</h2>
+        <p>The platform is currently in active development with ongoing improvements in model optimization, feature engineering modules, and UI enhancements.</p>
+    </section>
+</main>
+
+<!-- Include Footer -->
+{% include 'partials/footer.html' %}
+
+</body>
+</html>

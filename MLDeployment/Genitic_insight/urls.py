@@ -22,4 +22,8 @@ urlpatterns = [
     
     path('train-model-with-features/', views.train_model_with_features, name='train_model_with_features'),
 
+    path('generate_model_report/', views.generate_model_report, name='generate_model_report'),
+    
+    path('about/', views.about_view, name='about'),
+
     ]

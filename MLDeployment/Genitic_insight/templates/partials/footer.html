@@ -1,7 +1,41 @@
-   <!-- Footer -->
-    
-    <footer>
-        <div class="container text-center">
-            <p class="mb-0">&copy; 2025 Genitic_Insight. All rights reserved.</p>
+<!-- Footer -->
+<footer class="bg-primary bg-gradient pt-4 pb-3 mt-5 shadow-lg">
+    <div class="container text-center">
+        <!-- Social Links -->
+        <div class="d-flex justify-content-center gap-4 mb-3">
+            <a href="#" class="text-white fs-4 text-decoration-none">
+                <i class="bi bi-twitter-x"></i>
+            </a>
+            <a href="#" class="text-white fs-4 text-decoration-none">
+                <i class="bi bi-linkedin"></i>
+            </a>
+            <a href="#" class="text-white fs-4 text-decoration-none">
+                <i class="bi bi-github"></i>
+            </a>
+            <a href="#" class="text-white fs-4 text-decoration-none">
+                <i class="bi bi-envelope-fill"></i>
+            </a>
         </div>
-    </footer>
+        
+        <!-- Navigation Links -->
+        <div class="d-flex flex-wrap justify-content-center gap-3 gap-md-4 mb-3">
+            <a href="{% url 'about' %}" class="text-white text-decoration-none fw-medium">
+                About
+            </a>
+            <a href="{% url 'about' %}" class="text-white text-decoration-none fw-medium">
+                Privacy Policy
+            </a>
+            <a href="{% url 'about' %}" class="text-white text-decoration-none fw-medium">
+                Terms of Service
+            </a>
+            <a href="{% url 'about' %}" class="text-white text-decoration-none fw-medium">
+                Contact
+            </a>
+        </div>
+        
+        <!-- Copyright -->
+        <p class="text-white-50 mb-0">
+            &copy; 2025 Genetic_Insight. All rights reserved.
+        </p>
+    </div>
+</footer>

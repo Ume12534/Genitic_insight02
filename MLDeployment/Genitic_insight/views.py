@@ -25,10 +25,16 @@ from Bio import SeqIO
 import pandas as pd
 import numpy as np
 from sklearn.metrics import (
-    roc_curve, auc, accuracy_score, 
-    precision_score, recall_score, 
-    f1_score, confusion_matrix
+    accuracy_score, precision_score, recall_score, f1_score,
+    confusion_matrix, roc_curve, auc, precision_recall_curve,
+    average_precision_score, mean_squared_error, mean_absolute_error,
+    r2_score
 )
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import (
     RandomForestClassifier, AdaBoostClassifier,
@@ -803,6 +809,8 @@ def train_model(request):
     
     return JsonResponse({'error': 'Only POST requests are allowed'}, status=405)
 
+
+
 def module_selection_with_features(request):
     """
     Render module selection page with option to train on extracted features.
@@ -877,3 +885,465 @@ def data_visualization(request):
 
 def evaluation_values(request):
     return render(request, 'evaluation_values.html')
+
+def about_view(request):
+    return render(request, 'about.html')
+
+
+
+
+@csrf_exempt
+def generate_model_report(request):
+    """
+    Generates a downloadable report of model training results.
+    Supports PDF, HTML, and CSV formats.
+    
+    Args:
+        request: Django HTTP request containing:
+            - model_data: The training results data
+            - format: Report format (pdf, html, csv)
+            - report_name: Base name for the report file
+            - options: What to include in the report
+            
+    Returns:
+        File response with the generated report
+    """
+    if request.method == 'POST':
+        try:
+            # Parse request data
+            data = json.loads(request.body)
+            model_data = data.get('model_data')
+            report_format = data.get('format', 'pdf')
+            report_name = data.get('report_name', 'Model_Analysis_Report')
+            options = data.get('options', {})
+            
+            if not model_data:
+                return JsonResponse({'error': 'No model data provided'}, status=400)
+            
+            # Create temporary directory for report assets
+            with tempfile.TemporaryDirectory() as temp_dir:
+                if report_format == 'pdf':
+                    return generate_pdf_report(model_data, report_name, options, temp_dir)
+                elif report_format == 'html':
+                    return generate_html_report(model_data, report_name, options, temp_dir)
+                elif report_format == 'csv':
+                    return generate_csv_report(model_data, report_name, options)
+                else:
+                    return JsonResponse({'error': 'Invalid report format'}, status=400)
+                    
+        except Exception as e:
+            return JsonResponse({'error': f'Report generation failed: {str(e)}'}, status=500)
+    
+    return JsonResponse({'error': 'Only POST requests are allowed'}, status=405)
+
+def generate_pdf_report(model_data, report_name, options, temp_dir):
+    """
+    Generates a PDF report of model training results.
+    
+    Args:
+        model_data: Dictionary containing model training results
+        report_name: Base name for the report file
+        options: Dictionary of report options
+        temp_dir: Temporary directory for storing assets
+        
+    Returns:
+        FileResponse with the PDF report
+    """
+    try:
+        # Create buffer for PDF
+        buffer = BytesIO()
+        
+        # Create PDF document
+        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Add title
+        title_style = ParagraphStyle(
+            'Title',
+            parent=styles['Heading1'],
+            fontSize=16,
+            alignment=1,
+            spaceAfter=20
+        )
+        elements.append(Paragraph('Model Training Analysis Report', title_style))
+        
+        # Add metadata
+        meta_style = styles['Normal']
+        elements.append(Paragraph(f'<b>Problem Type:</b> {model_data.get("problem_type", "N/A")}', meta_style))
+        elements.append(Paragraph(f'<b>Target Column:</b> {model_data.get("target_column", "N/A")}', meta_style))
+        elements.append(Spacer(1, 20))
+        
+        # Add metrics section if requested
+        if options.get('include_metrics', True):
+            elements.append(Paragraph('<b>Model Performance Metrics</b>', styles['Heading2']))
+            
+            # Create metrics table
+            results = model_data.get('results', [])
+            if results:
+                # Prepare table data
+                table_data = [['Algorithm', 'Accuracy', 'Precision', 'Recall', 'F1 Score']]
+                
+                for result in results:
+                    if 'error' in result:
+                        table_data.append([result['algorithm'], result['error'], '', '', ''])
+                    else:
+                        table_data.append([
+                            result['algorithm'],
+                            f"{result.get('accuracy', 'N/A'):.4f}" if 'accuracy' in result else 'N/A',
+                            f"{result.get('precision', 'N/A'):.4f}" if 'precision' in result else 'N/A',
+                            f"{result.get('recall', 'N/A'):.4f}" if 'recall' in result else 'N/A',
+                            f"{result.get('f1_score', 'N/A'):.4f}" if 'f1_score' in result else 'N/A'
+                        ])
+                
+                # Create and style table
+                table = Table(table_data)
+                table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 12),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                ]))
+                elements.append(table)
+                elements.append(Spacer(1, 20))
+        
+        # Add parameters section if requested
+        if options.get('include_parameters', True):
+            elements.append(Paragraph('<b>Algorithm Parameters</b>', styles['Heading2']))
+            
+            for result in model_data.get('results', []):
+                if 'parameters' in result and result['parameters']:
+                    elements.append(Paragraph(f"<b>{result['algorithm']}</b>", styles['Normal']))
+                    
+                    param_data = []
+                    for param, value in result['parameters'].items():
+                        param_data.append([param, str(value)])
+                    
+                    param_table = Table(param_data, colWidths=[200, 200])
+                    param_table.setStyle(TableStyle([
+                        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                        ('FONTSIZE', (0, 0), (-1, -1), 10),
+                        ('VALIGN', (0, 0), (-1, -1), 'TOP')
+                    ]))
+                    elements.append(param_table)
+                    elements.append(Spacer(1, 10))
+            
+            elements.append(Spacer(1, 20))
+        
+        # Add charts section if requested and available
+        if options.get('include_charts', True) and model_data.get('binary_classification', False):
+            elements.append(Paragraph('<b>Performance Visualizations</b>', styles['Heading2']))
+            
+            # Generate ROC curve image
+            roc_fig = generate_roc_curve_figure(model_data)
+            if roc_fig:
+                roc_img_path = os.path.join(temp_dir, 'roc_curve.png')
+                roc_fig.savefig(roc_img_path, bbox_inches='tight', dpi=300)
+                plt.close(roc_fig)
+                
+                elements.append(Paragraph('ROC Curves', styles['Heading3']))
+                elements.append(Image(roc_img_path, width=400, height=300))
+                elements.append(Spacer(1, 20))
+            
+            # Generate PR curve image
+            pr_fig = generate_pr_curve_figure(model_data)
+            if pr_fig:
+                pr_img_path = os.path.join(temp_dir, 'pr_curve.png')
+                pr_fig.savefig(pr_img_path, bbox_inches='tight', dpi=300)
+                plt.close(pr_fig)
+                
+                elements.append(Paragraph('Precision-Recall Curves', styles['Heading3']))
+                elements.append(Image(pr_img_path, width=400, height=300))
+                elements.append(Spacer(1, 20))
+        
+        # Build PDF document
+        doc.build(elements)
+        
+        # Prepare response
+        buffer.seek(0)
+        response = HttpResponse(buffer, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{report_name}.pdf"'
+        return response
+        
+    except Exception as e:
+        return JsonResponse({'error': f'PDF generation failed: {str(e)}'}, status=500)
+
+def generate_roc_curve_figure(model_data):
+    """
+    Generates a matplotlib figure for ROC curves from model data.
+    
+    Args:
+        model_data: Dictionary containing model training results
+        
+    Returns:
+        Matplotlib figure object or None if no ROC data available
+    """
+    if not model_data.get('binary_classification', False):
+        return None
+    
+    results_with_roc = [r for r in model_data.get('results', []) if 'roc_curve' in r]
+    if not results_with_roc:
+        return None
+    
+    plt.figure(figsize=(8, 6))
+    plt.plot([0, 1], [0, 1], 'k--', label='Random Classifier')
+    
+    colors = ['b', 'g', 'r', 'c', 'm', 'y', 'k']
+    for i, result in enumerate(results_with_roc):
+        roc_data = result['roc_curve']
+        plt.plot(
+            roc_data['fpr'], 
+            roc_data['tpr'], 
+            color=colors[i % len(colors)],
+            label=f"{result['algorithm']} (AUC = {roc_data['auc']:.2f})"
+        )
+    
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver Operating Characteristic (ROC) Curves')
+    plt.legend(loc='lower right')
+    plt.grid(True)
+    
+    return plt.gcf()
+
+def generate_pr_curve_figure(model_data):
+    """
+    Generates a matplotlib figure for Precision-Recall curves from model data.
+    
+    Args:
+        model_data: Dictionary containing model training results
+        
+    Returns:
+        Matplotlib figure object or None if no PR data available
+    """
+    if not model_data.get('binary_classification', False):
+        return None
+    
+    results_with_pr = [r for r in model_data.get('results', []) if 'pr_curve' in r]
+    if not results_with_pr:
+        return None
+    
+    plt.figure(figsize=(8, 6))
+    
+    colors = ['b', 'g', 'r', 'c', 'm', 'y', 'k']
+    for i, result in enumerate(results_with_pr):
+        pr_data = result['pr_curve']
+        plt.plot(
+            pr_data['recall'], 
+            pr_data['precision'], 
+            color=colors[i % len(colors)],
+            label=f"{result['algorithm']} (AP = {pr_data['auprc']:.2f})"
+        )
+    
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curves')
+    plt.legend(loc='lower left')
+    plt.grid(True)
+    
+    return plt.gcf()
+
+def generate_html_report(model_data, report_name, options, temp_dir):
+    """
+    Generates an HTML report of model training results.
+    
+    Args:
+        model_data: Dictionary containing model training results
+        report_name: Base name for the report file
+        options: Dictionary of report options
+        temp_dir: Temporary directory for storing assets
+        
+    Returns:
+        FileResponse with the HTML report
+    """
+    try:
+        # Start building HTML content
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>{report_name}</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                h1 {{ color: #2c3e50; }}
+                h2 {{ color: #3498db; margin-top: 30px; }}
+                h3 {{ color: #7f8c8d; }}
+                table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
+                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                th {{ background-color: #f2f2f2; }}
+                tr:nth-child(even) {{ background-color: #f9f9f9; }}
+                .metric-table {{ width: 80%; margin: 20px auto; }}
+                .chart {{ text-align: center; margin: 30px 0; }}
+                .chart img {{ max-width: 100%; height: auto; }}
+            </style>
+        </head>
+        <body>
+            <h1>Model Training Analysis Report</h1>
+            <p><strong>Problem Type:</strong> {model_data.get('problem_type', 'N/A')}</p>
+            <p><strong>Target Column:</strong> {model_data.get('target_column', 'N/A')}</p>
+        """
+        
+        # Add metrics section if requested
+        if options.get('include_metrics', True):
+            html_content += "<h2>Model Performance Metrics</h2>"
+            
+            results = model_data.get('results', [])
+            if results:
+                html_content += """
+                <table class="metric-table">
+                    <tr>
+                        <th>Algorithm</th>
+                        <th>Accuracy</th>
+                        <th>Precision</th>
+                        <th>Recall</th>
+                        <th>F1 Score</th>
+                    </tr>
+                """
+                
+                for result in results:
+                    if 'error' in result:
+                        html_content += f"""
+                        <tr>
+                            <td>{result['algorithm']}</td>
+                            <td colspan="4">{result['error']}</td>
+                        </tr>
+                        """
+                    else:
+                        html_content += f"""
+                        <tr>
+                            <td>{result['algorithm']}</td>
+                            <td>{result.get('accuracy', 'N/A'):.4f if 'accuracy' in result else 'N/A'}</td>
+                            <td>{result.get('precision', 'N/A'):.4f if 'precision' in result else 'N/A'}</td>
+                            <td>{result.get('recall', 'N/A'):.4f if 'recall' in result else 'N/A'}</td>
+                            <td>{result.get('f1_score', 'N/A'):.4f if 'f1_score' in result else 'N/A'}</td>
+                        </tr>
+                        """
+                
+                html_content += "</table>"
+        
+        # Add parameters section if requested
+        if options.get('include_parameters', True):
+            html_content += "<h2>Algorithm Parameters</h2>"
+            
+            for result in model_data.get('results', []):
+                if 'parameters' in result and result['parameters']:
+                    html_content += f"<h3>{result['algorithm']}</h3><table>"
+                    
+                    for param, value in result['parameters'].items():
+                        html_content += f"""
+                        <tr>
+                            <td><strong>{param}</strong></td>
+                            <td>{value}</td>
+                        </tr>
+                        """
+                    
+                    html_content += "</table>"
+        
+        # Add charts section if requested and available
+        if options.get('include_charts', True) and model_data.get('binary_classification', False):
+            html_content += "<h2>Performance Visualizations</h2>"
+            
+            # Generate ROC curve image
+            roc_fig = generate_roc_curve_figure(model_data)
+            if roc_fig:
+                roc_img_path = os.path.join(temp_dir, 'roc_curve.png')
+                roc_fig.savefig(roc_img_path, bbox_inches='tight', dpi=300)
+                plt.close(roc_fig)
+                
+                with open(roc_img_path, "rb") as img_file:
+                    roc_img_base64 = base64.b64encode(img_file.read()).decode('utf-8')
+                
+                html_content += f"""
+                <div class="chart">
+                    <h3>ROC Curves</h3>
+                    <img src="data:image/png;base64,{roc_img_base64}" alt="ROC Curves">
+                </div>
+                """
+            
+            # Generate PR curve image
+            pr_fig = generate_pr_curve_figure(model_data)
+            if pr_fig:
+                pr_img_path = os.path.join(temp_dir, 'pr_curve.png')
+                pr_fig.savefig(pr_img_path, bbox_inches='tight', dpi=300)
+                plt.close(pr_fig)
+                
+                with open(pr_img_path, "rb") as img_file:
+                    pr_img_base64 = base64.b64encode(img_file.read()).decode('utf-8')
+                
+                html_content += f"""
+                <div class="chart">
+                    <h3>Precision-Recall Curves</h3>
+                    <img src="data:image/png;base64,{pr_img_base64}" alt="Precision-Recall Curves">
+                </div>
+                """
+        
+        # Close HTML document
+        html_content += "</body></html>"
+        
+        # Prepare response
+        response = HttpResponse(html_content, content_type='text/html')
+        response['Content-Disposition'] = f'attachment; filename="{report_name}.html"'
+        return response
+        
+    except Exception as e:
+        return JsonResponse({'error': f'HTML generation failed: {str(e)}'}, status=500)
+
+def generate_csv_report(model_data, report_name, options):
+    """
+    Generates a CSV report of model metrics.
+    
+    Args:
+        model_data: Dictionary containing model training results
+        report_name: Base name for the report file
+        options: Dictionary of report options
+        
+    Returns:
+        FileResponse with the CSV report
+    """
+    try:
+        if not options.get('include_metrics', True):
+            return JsonResponse({'error': 'CSV reports only include metrics'}, status=400)
+        
+        # Prepare CSV data
+        results = model_data.get('results', [])
+        if not results:
+            return JsonResponse({'error': 'No results data available'}, status=400)
+        
+        # Create DataFrame from results
+        data = []
+        for result in results:
+            if 'error' in result:
+                row = {
+                    'Algorithm': result['algorithm'],
+                    'Error': result['error'],
+                    'Accuracy': '',
+                    'Precision': '',
+                    'Recall': '',
+                    'F1 Score': ''
+                }
+            else:
+                row = {
+                    'Algorithm': result['algorithm'],
+                    'Error': '',
+                    'Accuracy': result.get('accuracy', ''),
+                    'Precision': result.get('precision', ''),
+                    'Recall': result.get('recall', ''),
+                    'F1 Score': result.get('f1_score', '')
+                }
+            data.append(row)
+        
+        df = pd.DataFrame(data)
+        
+        # Create CSV response
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="{report_name}.csv"'
+        
+        df.to_csv(response, index=False)
+        return response
+        
+    except Exception as e:
+        return JsonResponse({'error': f'CSV generation failed: {str(e)}'}, status=500)
