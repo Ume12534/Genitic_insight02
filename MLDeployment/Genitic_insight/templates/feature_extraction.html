@@ -26,32 +26,42 @@
 
     <style>
         
-.result-card { transition: all 0.3s ease; }
-        #loading-spinner { display: none; }
-        .preview-sequence { 
-            font-family: monospace; 
-            background-color: #f8f9fa;
-            padding: 15px;
-            border-radius: 5px;
-            max-height: 150px;
-            overflow-y: auto;
+        /* Custom hover effect for both buttons */
+        #downloadBtn:hover, #refresh:hover, #startAnalysis:hover {
+            background-color: #1a5276 !important;
+            border-color: #1a5276 !important;
         }
 
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
+        /* Remove Bootstrap's default outline on focus */
+        #downloadBtn:focus, #refresh:focus, #startAnalysis:focus {
+            box-shadow: 0 0 0 0.25rem rgba(41, 128, 185, 0.5);
         }
-        table, th, td {
-            border: 1px solid black;
-        }
-        th, td {
-            padding: 10px;
-            text-align: left;
-        }
-        th {
-            background-color: #f2f2f2;
-        }
+        .result-card { transition: all 0.3s ease; }
+                #loading-spinner { display: none; }
+                .preview-sequence { 
+                    font-family: monospace; 
+                    background-color: #f8f9fa;
+                    padding: 15px;
+                    border-radius: 5px;
+                    max-height: 150px;
+                    overflow-y: auto;
+                }
+
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin-top: 20px;
+                }
+                table, th, td {
+                    border: 1px solid black;
+                }
+                th, td {
+                    padding: 10px;
+                    text-align: left;
+                }
+                th {
+                    background-color: #f2f2f2;
+                }
     </style>
 </head>
 <body>
@@ -151,7 +161,7 @@
             <!--<button class="btn btn-success" id="startAnalysis">
                     <i class="fas fa-play me-2"></i> Start Analysis
                 </button> -->
-                <a href="#loadingAnimation" id="startAnalysis" class="btn btn-success"> <i class="fas fa-play me-2"></i>Start Analysis</a>
+                <a href="#footer" id="startAnalysis" class="btn" style="background-color: #2980b9; border-color: #2980b9; color: white;"> <i class="fas fa-play me-2"></i>Start Analysis</a>
             </div>
         </div>
     </div>
@@ -171,9 +181,18 @@
     </div>
 
     <!-- Download Button -->
-    <button id="downloadBtn" class="btn btn-success mt-3" style="width: 100%;">
-        <i class="fas fa-download"></i> Download CSV
-    </button>
+    <div class="d-flex gap-3">
+        <button id="downloadBtn" class="btn flex-grow-1 text-white" style="background-color: #2980b9; border-color: #2980b9;">
+            <i class="fas fa-download me-2"></i>Download CSV
+        </button>
+
+        <a href="{% url 'feature_extraction' %}" id="refresh" class="btn flex-grow-1 text-white text-decoration-none" style="background-color: #2980b9; border-color: #2980b9;">
+            <i class="fas fa-sync-alt me-2"></i>For New Data
+        </a>
+    </div>
+
+    
+
 
 </div>
 
@@ -183,6 +202,7 @@
     <i class="fas fa-spinner fa-spin fa-3x"></i>
     <p>Extracting Features...</p>
 </div>
+
 
 <!-- Include Footer -->
 {% include 'partials/footer.html' %}
